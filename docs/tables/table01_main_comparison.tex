@@ -1,0 +1,21 @@
+\begin{table*}[t]
+\centering
+\caption{Baseline Comparison: Stability Rate (\%) and Margin $\rho(\tau)$ across IEEE test cases (mean $\pm$ std over 5 seeds).}
+\label{tab:main_comparison}
+\begin{tabular}{lcccccccccc}
+\toprule
+Model & \multicolumn{2}{c}{IEEE 14} & \multicolumn{2}{c}{IEEE 30} & \multicolumn{2}{c}{IEEE 39} & \multicolumn{2}{c}{IEEE 57} & \multicolumn{2}{c}{IEEE 118} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}\cmidrule(lr){8-9}\cmidrule(lr){10-11}
+ & Stab. (\%) & $\rho(\tau)$ & Stab. (\%) & $\rho(\tau)$ & Stab. (\%) & $\rho(\tau)$ & Stab. (\%) & $\rho(\tau)$ & Stab. (\%) & $\rho(\tau)$ \\
+\midrule
+\textbf{Ours (JointOpt)} & $100.0 \pm 0.0$ & $0.3867 \pm 0.0003$ & $100.0 \pm 0.0$ & $0.3869 \pm 0.0001$ & $100.0 \pm 0.0$ & $0.3871 \pm 0.0001$ & $100.0 \pm 0.0$ & $0.3867 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3867 \pm 0.0001$ \\
+B1: Sequential & $100.0 \pm 0.0$ & $0.3818 \pm 0.0004$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0001$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3819 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0001$ \\
+B2: MLP Joint & $100.0 \pm 0.0$ & $0.3828 \pm 0.0003$ & $100.0 \pm 0.0$ & $0.3828 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3822 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0001$ \\
+B3: GNN Only & $100.0 \pm 0.0$ & $0.3823 \pm 0.0004$ & $100.0 \pm 0.0$ & $0.3824 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3822 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3820 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0001$ \\
+B4: LSTM Joint & $100.0 \pm 0.0$ & $0.3839 \pm 0.0004$ & $100.0 \pm 0.0$ & $0.3840 \pm 0.0001$ & $100.0 \pm 0.0$ & $0.3822 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3829 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0001$ \\
+B5: CNN Joint & $100.0 \pm 0.0$ & $0.3837 \pm 0.0004$ & $100.0 \pm 0.0$ & $0.3836 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3824 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0001$ \\
+B6: Vanilla Trans. & $100.0 \pm 0.0$ & $0.3834 \pm 0.0003$ & $100.0 \pm 0.0$ & $0.3833 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3822 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0001$ \\
+B7: Trans. No Coupling & $100.0 \pm 0.0$ & $0.3818 \pm 0.0004$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0001$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3819 \pm 0.0002$ & $100.0 \pm 0.0$ & $0.3821 \pm 0.0001$ \\
+\bottomrule
+\end{tabular}
+\end{table*}

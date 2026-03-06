@@ -1,0 +1,19 @@
+\begin{table}[t]
+\centering
+\caption{Model Compression: Embedding dimension vs.\ stability margin and parameter count.}
+\label{tab:compression}
+\begin{tabular}{cccccc}
+\toprule
+$d_{\mathrm{embed}}$ & $d_{\mathrm{hidden}}$ & Heads & Params & $\rho(\tau)$ & Stab. (\%) \\
+\midrule
+\multicolumn{6}{c}{\textit{IEEE 39}} \\
+\midrule
+32 & 64 & 2 & 32,105 & 0.3556 & 100.0 \\
+64 & 128 & 4 & 121,513 & 0.3556 & 100.0 \\
+96 & 192 & 6 & 268,265 & 0.3556 & 100.0 \\
+128 & 256 & 8 & 472,361 & 0.3556 & 100.0 \\
+192 & 384 & 12 & 1,052,585 & 0.3556 & 100.0 \\
+256 & 512 & 16 & 1,862,185 & 0.3556 & 100.0 \\
+\bottomrule
+\end{tabular}
+\end{table}

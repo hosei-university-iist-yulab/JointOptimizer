@@ -1,0 +1,37 @@
+# JointOptimizer Tutorial Notebook — Independent Requirements
+# Install with: pip install -r requirements.txt
+# (No need to activate the project environment)
+#
+# Tested with Python 3.9+
+
+# Core scientific stack
+numpy>=1.24
+pandas>=1.5
+scipy>=1.10
+matplotlib>=3.7
+
+# Interactive visualization
+plotly>=5.15
+ipywidgets>=8.0
+
+# Graph utilities
+networkx>=3.0
+
+# Jupyter
+jupyter>=1.0
+notebook>=7.0
+nbformat>=4.5
+
+# PDF figure rendering (for paper figures)
+PyMuPDF>=1.22   # provides `import fitz`
+
+# YAML config loading
+pyyaml>=6.0
+
+# ── Optional (for live inference demo) ─────────────────────────
+# torch>=2.0
+# torch-geometric>=2.3
+# pandapower>=2.12   # real IEEE case loading
+
+# ── Quick install (minimal, no GPU) ────────────────────────────
+# pip install numpy pandas scipy matplotlib plotly ipywidgets networkx notebook PyMuPDF pyyaml
