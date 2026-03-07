@@ -710,8 +710,8 @@ Email: franckjunioraboya.messou@ieee.org
 @article{messou2025learnable,
   title={Learnable Delay-Stability Coupling for Smart Grid Communication Networks: A Physics-Constrained Deep Learning Approach},
   author={Messou, Franck Junior Aboya and Chen, Jinhua and Zain, Alaa and Wang, Weiyu and Yu, Keping and Tolba, Amr and Alfarraj, Osama},
-  journal={Submitted to Applied Energy},
-  year={2025},
+  journal={Applied Energy, Elsevier},
+  year={2026},
   note={Under review}
 }
 ```
@@ -719,8 +719,8 @@ Email: franckjunioraboya.messou@ieee.org
 ---
 
 **Project Timeline:**
-- Started: December 16, 2025
-- Completed: February 28, 2026
-- Duration: 2.5 months
+- Started: November 03, 2025
+- Completed: March 07, 2026
+- Duration: 4 months
 
-**Last Updated:** February 28, 2026
+**Last Updated:** March 07, 2026
