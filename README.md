@@ -698,29 +698,43 @@ Graduate School of Science and Engineering
 Hosei University, Tokyo 184-8584, Japan
 Email: keping.yu@ieee.org
 
-**First Author:**
-Franck Junior Aboya Messou
-Email: franckjunioraboya.messou@ieee.org
+<a href="https://github.com/mesabo">
+  <img src="https://github.com/mesabo.png" width="60" style="border-radius:50%">
+</a>
+
+**Franck Junior Aboya Messou** ([@mesabo](https://github.com/mesabo)) -- First Author
+franckjunioraboya.messou@ieee.org
 
 ---
 
-## 📝 Citation (Preprint)
+## Citation
+
+Preprint available on SSRN: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6368058
 
 ```bibtex
-@article{messou2025learnable,
-  title={Learnable Delay-Stability Coupling for Smart Grid Communication Networks: A Physics-Constrained Deep Learning Approach},
-  author={Messou, Franck Junior Aboya and Chen, Jinhua and Zain, Alaa and Wang, Weiyu and Yu, Keping and Tolba, Amr and Alfarraj, Osama},
-  journal={Applied Energy, Elsevier},
+@article{messou2026learnable,
+  title={Learnable Delay-Stability Coupling for Smart Grid Communication
+         Networks: A Physics-Constrained Deep Learning Approach},
+  author={Messou, Franck Junior Aboya and Chen, Jinhua and Zain, Alaa
+          and Wang, Weiyu and Yu, Keping and Zhao, Zihan
+          and Tolba, Amr and Alfarraj, Osama},
+  journal={Applied Energy (Elsevier)},
   year={2026},
-  note={Under review}
+  note={Under review. Preprint: SSRN 6368058}
 }
 ```
 
+## Related Repositories
+
+This work is part of the Smart Grid Communication research programme at YuLab, Hosei University:
+
+- [ResilientJointOptimizer](https://github.com/hosei-university-iist-yulab/ResilientJointOptimizer) -- Multi-Impairment Extension (Theorem 2: Delay + Packet Loss + Jitter)
+- [NumLoRA](https://github.com/hosei-university-iist-yulab/NumLoRA) -- Calibrating LoRA for Continuous-Valued Inputs
+- [01-causal-slm](https://github.com/hosei-university-iist-yulab/01-causal-slm) -- Causal Sensor Language Models (VTC2026-Spring)
+- [smartgrid-coopt](https://github.com/mesabo/smartgrid-coopt) -- Smart Grid Co-Optimisation Framework
+
+Full publication list: [Google Scholar](https://scholar.google.com/scholar?q=Franck+Junior+Aboya+Messou) | [GitHub](https://github.com/mesabo)
+
 ---
 
-**Project Timeline:**
-- Started: November 03, 2025
-- Completed: March 07, 2026
-- Duration: 4 months
-
-**Last Updated:** March 07, 2026
+**Project Timeline:** November 2025 -- March 2026 (4 months)
