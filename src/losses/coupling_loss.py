@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🚀 Created on 01/28/2025🚀
+🚀 Created on 01/28/2026🚀
 
 Author: Franck Aboya
-Email: mesabo18@gmail.com / messouaboya17@gmail.com
+Email: franckjunioraboya.messou@ieee.org
 Github: https://github.com/mesabo
 Univ: Hosei University, PhD
 Dept: Science and Engineering
@@ -291,17 +291,124 @@ class CouplingLossWithLearning(nn.Module):
         return loss, components
 
 
+class BidirectionalCouplingLoss(nn.Module):
+    """Bidirectional residual coupling loss (major-revision R1.8).
+
+    The original L_couple was unidirectional: it pulled the learnable K_i
+    toward whatever value reproduced the analytic Pade margin, which the
+    reviewer flagged as 'constraining data with theory'. This formulation
+    closes the loop by also pulling K toward a closed-form ridge-regression
+    estimate computed from the empirical (tau, rho_emp) batch:
+
+        L_couple = beta * || rho_th(K, tau) - rho_emp(tau) ||^2
+                 + (1 - beta) * || K - K_data ||^2
+
+    where K_data solves arg min_K || rho_emp - |lambda_min| + (tau/tau_max) K ||^2
+    + lambda_ridge ||K||^2 in closed form per minibatch, and beta is the
+    precision weight beta = sigma_data^2 / (sigma_th^2 + sigma_data^2)
+    estimated online via exponential moving averages of the two residual
+    streams. When sigma_th << sigma_data the loss recovers the original
+    unidirectional form; when sigma_th >> sigma_data the model trusts the
+    data-driven K estimate instead.
+    """
+
+    def __init__(
+        self,
+        lambda_ridge: float = 1e-2,
+        ema_decay: float = 0.99,
+        eps: float = 1e-6,
+    ):
+        super().__init__()
+        self.lambda_ridge = float(lambda_ridge)
+        self.ema_decay = float(ema_decay)
+        self.eps = float(eps)
+        self.register_buffer('sigma_th_sq', torch.tensor(1.0))
+        self.register_buffer('sigma_data_sq', torch.tensor(1.0))
+
+    def forward(
+        self,
+        K: torch.Tensor,
+        tau: torch.Tensor,
+        tau_max: torch.Tensor,
+        rho_emp: torch.Tensor,
+        lambda_min_0: torch.Tensor,
+    ) -> Tuple[torch.Tensor, dict]:
+        """Compute the bidirectional residual loss.
+
+        Args:
+            K: Learnable coupling vector [n_gen].
+            tau: Per-sample delays [batch, n_gen] (seconds).
+            tau_max: Per-generator delay normalisers [n_gen] (seconds).
+            rho_emp: Empirical stability margin observed per sample [batch].
+            lambda_min_0: Reference baseline eigenvalue [batch] or scalar.
+        """
+        eta = tau / tau_max.unsqueeze(0)                     # [B, n_gen]
+        lam = torch.abs(lambda_min_0)
+        if lam.dim() == 0:
+            lam = lam.expand(rho_emp.shape[0])
+        rho_th = lam - (K.unsqueeze(0) * eta).sum(dim=-1)    # [B]
+        residual_th = rho_th - rho_emp                       # [B]
+
+        # Closed-form ridge regression for K_data.
+        with torch.no_grad():
+            X = eta.detach()                                  # [B, n_gen]
+            y = (lam - rho_emp).detach()                      # [B]
+            n_gen = X.shape[1]
+            XtX = X.t() @ X + self.lambda_ridge * torch.eye(
+                n_gen, device=X.device, dtype=X.dtype,
+            )
+            Xty = X.t() @ y
+            K_data = torch.linalg.solve(XtX, Xty)             # [n_gen]
+        residual_data = K - K_data                            # [n_gen]
+
+        # Precision-weighted beta via EMA of residual variances.
+        with torch.no_grad():
+            new_sigma_th = residual_th.var(unbiased=False) + self.eps
+            new_sigma_data = residual_data.var(unbiased=False) + self.eps
+            self.sigma_th_sq = (
+                self.ema_decay * self.sigma_th_sq
+                + (1 - self.ema_decay) * new_sigma_th
+            )
+            self.sigma_data_sq = (
+                self.ema_decay * self.sigma_data_sq
+                + (1 - self.ema_decay) * new_sigma_data
+            )
+            beta = self.sigma_data_sq / (self.sigma_th_sq + self.sigma_data_sq)
+
+        loss_th = (residual_th ** 2).mean()
+        loss_data = (residual_data ** 2).mean()
+        loss = beta * loss_th + (1.0 - beta) * loss_data
+
+        components = {
+            'L_couple_th': float(loss_th.detach().item()),
+            'L_couple_data': float(loss_data.detach().item()),
+            'beta_precision': float(beta.detach().item()),
+            'sigma_th_sq': float(self.sigma_th_sq.detach().item()),
+            'sigma_data_sq': float(self.sigma_data_sq.detach().item()),
+            'K_data_mean': float(K_data.mean().detach().item()),
+            'K_data_std': float(K_data.std().detach().item()),
+        }
+        return loss, components
+
+
 def simple_stability_loss(
     rho: torch.Tensor,
     K: torch.Tensor,
     lambda_min_0: torch.Tensor,
     rho_min: float = 0.01,
+    lambda_l1: float = 0.0,
+    lambda_l2: float = 0.01,
 ) -> torch.Tensor:
     """
     Simplified but correct stability loss for experiment scripts.
 
     Uses log-barrier when rho > rho_min, quadratic penalty when rho < rho_min.
     K regularization uses .mean() (not .sum()) so it scales with n_gen.
+
+    Major-revision lever 2: optional L1 sparsity penalty on K so gradient
+    descent is pushed toward smaller K_i values (tighter delay-stability
+    bound, larger tau_crit). Set ``lambda_l1 > 0`` to enable; the default
+    keeps the legacy L2-only behavior.
     """
     # Log-barrier for positive margins
     rho_safe = torch.clamp(rho, min=rho_min)
@@ -310,7 +417,8 @@ def simple_stability_loss(
     # Quadratic penalty for negative margins (provides gradient when rho << 0)
     neg_penalty = 10.0 * torch.clamp(-rho + rho_min, min=0).pow(2).mean()
 
-    # K regularization — mean not sum
-    k_reg = 0.01 * (K ** 2).mean()
+    # K regularization — mean not sum.
+    k_l2 = lambda_l2 * (K ** 2).mean()
+    k_l1 = lambda_l1 * K.abs().mean() if lambda_l1 > 0.0 else torch.tensor(0.0, device=K.device)
 
-    return log_barrier + neg_penalty + k_reg
+    return log_barrier + neg_penalty + k_l2 + k_l1

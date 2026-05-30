@@ -765,3 +765,103 @@ JOINT LOSS:
 │                                                                                  │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 13. Figure Specifications for Publication
+
+### Figure 1: System Overview (Single Column)
+- **Size:** 3.5" x 2.5"
+- **Elements:** 3 main blocks (Input, Model, Output)
+- **Colors:** Blue (energy), Green (communication), Purple (fusion)
+
+### Figure 2: Detailed Architecture (Two Column)
+- **Size:** 7" x 4"
+- **Elements:** Full component breakdown with Padé-2 stability computer
+- **Annotations:** Tensor shapes at each stage, auto-scaled K initialization
+
+### Figure 3: Comparison with Baselines
+- **Size:** 7" x 3"
+- **Layout:** Side-by-side architecture comparison (B1-B9 + JointOptimizer)
+- **Highlight:** JointOptimizer advantages (cross-attention, auto-scaled learnable K, adaptive gamma)
+
+### Figure 4: K Auto-Scaling Effect
+- **Size:** 3.5" x 2.5"
+- **Elements:** Table/bar chart of k_init values per grid, convergence from multiple inits
+- **Key:** Shows that auto-scaled K produces stable initial margin for all grid sizes
+
+### Figure 5: Padé Order Comparison
+- **Size:** 3.5" x 2.5"
+- **Elements:** ρ(τ) curves for Padé-1, Padé-2, exact, and simulation
+- **Key:** Shows tighter bound from Corollary 1
+
+### Figure 6: Stress Test Heatmap
+- **Size:** 7" x 3"
+- **Elements:** Heatmap of stability rate by scenario x model
+- **Key:** Shows JointOptimizer advantage under stress
+
+### Figure 7: Transfer Learning Results
+- **Size:** 3.5" x 2.5"
+- **Elements:** Bar chart of transfer modes (zero-shot to scratch) across grid pairs
+
+---
+
+## Color Scheme Recommendation
+
+| Component | Hex Color | RGB |
+|-----------|-----------|-----|
+| Energy Domain | #3498DB | (52, 152, 219) |
+| Communication Domain | #2ECC71 | (46, 204, 113) |
+| Fusion/Attention | #9B59B6 | (155, 89, 182) |
+| Output/Results | #E74C3C | (231, 76, 60) |
+| Parameters (K) | #F39C12 | (243, 156, 18) |
+| Background | #ECF0F1 | (236, 240, 241) |
+| Stress/Instability | #C0392B | (192, 57, 43) |
+| Transfer Learning | #1ABC9C | (26, 188, 156) |
+
+---
+
+## IEEE Test Cases Summary
+
+| Case | Buses | Generators | Branches | k_init (auto) | Status |
+|------|-------|------------|----------|---------------|--------|
+| IEEE 14 | 14 | 5 | 20 | ~0.131 | Baseline (too easy) |
+| IEEE 30 | 30 | 6 | 41 | ~0.078 | Journal extension |
+| IEEE 39 | 39 | 10 | 46 | ~0.053 | Primary validation |
+| IEEE 57 | 57 | 7 | 80 | ~0.060 | Medium-scale test |
+| IEEE 118 | 118 | 54 | 186 | ~0.006 | Large-scale test |
+| Synthetic 10K | 10000 | ~2000 | ~15000 | ~0.00014 | Scalability limit |
+
+---
+
+*Updated: 2026-02-12*
+*For: IEEE Transactions on Smart Grid — Journal Extension*
+*Energy-Information Co-Optimization with Learnable Delay-Stability Coupling*
+*Version: Journal Extension (V2)*
+
+
+## 14. Graphical Abstract Design: 531 x 1328 px (h x w), landscape 5 x 13 cm
+
+```
+┌──────────────────┬──────────────────────────────┬──────────────────────┐
+│                  │                              │                      │
+│   1. PROBLEM     │   2. METHOD                  │   3. KEY RESULTS     │
+│                  │                              │                      │
+│  ┌───────────┐   │                              │                      │
+│  │ Power Grid│   │  ┌────────┐  ┌──────────┐   │  ┌────────────────┐  │
+│  │  [icon]   │   │  │GNN-E   │  │Hierarchi-│   │  │ Radar chart    │  │
+│  └─────┬─────┘   │  │[graph] │→ │cal Fusion│   │  │ (dominance     │  │
+│    ↕ τ delay     │  └────────┘  │[attention│   │  │  over 9        │  │
+│  ┌─────┴─────┐   │  ┌────────┐  │ + masks] │   │  │  baselines)    │  │
+│  │ Comm Net  │   │  │GNN-I   │→ └────┬─────┘   │  └────────────────┘  │
+│  │  [icon]   │   │  │[graph] │       │         │                      │
+│  └───────────┘   │  └────────┘       ↓         │  Key numbers:        │
+│                  │           ┌────────────┐    │  • 23% cost ↓        │
+│  τ↑ ⟹ ρ↓        │           │Learnable K │    │  • ρ > 0 guaranteed  │
+│  (instability)   │           │ρ(τ) bound  │    │  • 14→118 bus        │
+│                  │           └────────────┘    │  • Sub-25ms latency  │
+│                  │                             │                      │
+└──────────────────┴─────────────────────────────┴──────────────────────┘
+
+Title bar across top: "Learnable Delay-Stability Coupling for Smart Grid Communication Networks"
+```

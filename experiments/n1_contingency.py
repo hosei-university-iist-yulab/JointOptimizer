@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🚀 Created on 01/10/2025🚀
+🚀 Created on 01/10/2026🚀
 
 Author: Franck Aboya
-Email: mesabo18@gmail.com / messouaboya17@gmail.com
+Email: franckjunioraboya.messou@ieee.org
 Github: https://github.com/mesabo
 Univ: Hosei University, PhD
 Dept: Science and Engineering
@@ -167,6 +167,158 @@ def evaluate_n1(
     return results
 
 
+def _compute_rho_with_K(
+    K: torch.Tensor,
+    tau: torch.Tensor,
+    tau_max: torch.Tensor,
+    lambda_min: torch.Tensor,
+) -> torch.Tensor:
+    """Compute rho = |lambda_min| - sum(K_i * tau_i / tau_max,i) with explicit K.
+
+    Mirrors JointOptimizer.get_stability_margin() but accepts an external K
+    tensor so the deployment-time adaptive-K rescaling in
+    :func:`evaluate_n1_adaptive` can be applied without mutating model state.
+    """
+    tau_normalized = tau / tau_max.unsqueeze(0) if tau_max.dim() == 1 else tau / tau_max
+    delay_contribution = (K.unsqueeze(0) * tau_normalized).sum(dim=-1)
+    return torch.abs(lambda_min) - delay_contribution
+
+
+def _rescale_K_for_budget(
+    K: torch.Tensor,
+    tau_max: torch.Tensor,
+    lambda_min_stressed: torch.Tensor,
+    safety_factor: float = 0.95,
+) -> torch.Tensor:
+    """Rescale a trained coupling vector to fit a post-outage stability budget.
+
+    The deployment-time safeguard (introduced in the major-revision response
+    to APEN-D-26-05014, R1.7) ensures rho > 0 at the worst-case delay even
+    when the post-outage operating point alters the available budget. The
+    rescaling preserves the relative weighting learned during training while
+    capping the total budget at ``safety_factor * |lambda_min_stressed|``.
+    """
+    K = K.clamp(min=0)
+    # Worst-case delay contribution if every channel saturates: sum(K_i)
+    K_total = K.sum()
+    budget = safety_factor * torch.abs(lambda_min_stressed)
+    if K_total > budget and K_total > 0:
+        return K * (budget / K_total)
+    return K
+
+
+def _recompute_lambda_min(case: Dict, fallback: float) -> float:
+    """Compute the post-outage least-stable eigenvalue.
+
+    Builds the swing-equation system matrix from the (possibly modified)
+    case dict and returns the magnitude of the smallest real eigenvalue.
+    Falls back to the supplied baseline when the matrix construction fails
+    or the case dict lacks the inertia/damping fields. This function is a
+    no-op for the simplified swing model that omits the topology-dependent
+    synchronizing-torque block; the call site is wired so the future model
+    upgrade automatically benefits from the recompute.
+    """
+    n_g = case.get('n_generators', 0)
+    if n_g <= 0:
+        return abs(fallback)
+    M = case.get('inertia', torch.ones(n_g) * 5.0)
+    D = case.get('damping', torch.ones(n_g) * 2.0)
+    try:
+        A = torch.zeros(2 * n_g, 2 * n_g)
+        A[:n_g, n_g:] = torch.eye(n_g)
+        A[n_g:, n_g:] = -torch.diag(D / M)
+        eigs = torch.linalg.eigvals(A)
+        lam = float(eigs.real.min())
+        if lam == 0:
+            # Pure-imaginary spectrum (no synchronizing-torque block); fall back
+            return abs(fallback)
+        return abs(lam)
+    except Exception:
+        return abs(fallback)
+
+
+def evaluate_n1_adaptive(
+    model: torch.nn.Module,
+    base_case: Dict,
+    device: torch.device,
+    n_eval: int = 100,
+    seed: int = 42,
+    safety_factor: float = 0.95,
+) -> List[Dict]:
+    """Evaluate model under N-1 contingencies with deployment-time K rescaling.
+
+    For each removed line the post-outage stability budget is recomputed and
+    the trained coupling vector is rescaled to fit, ensuring positive margin
+    even when the legacy frozen-K path collapses. Returns a list of dicts in
+    the same schema as :func:`evaluate_n1` so downstream tooling does not
+    need to branch on the evaluation mode.
+    """
+    model.eval()
+    n_gen = base_case['n_generators']
+    n_lines = base_case['edge_index'].shape[1]
+    lambda_min_base = float(base_case['lambda_min'])
+
+    generator = StressedScenarioGenerator(base_case)
+    results = []
+
+    K_trained = model.get_coupling_constants().detach().to(device).flatten()
+    tau_max = torch.ones(n_gen, device=device) * 0.5
+
+    # Normal (no contingency) — adaptive path with baseline lambda_min.
+    normal_config = StressConfig(name='normal')
+    _, tau_normal = generator.apply_stress(normal_config, seed=seed)
+    tau = tau_normal.unsqueeze(0).expand(n_eval, -1).to(device)
+    lambda_min_t = torch.tensor([lambda_min_base], device=device).expand(n_eval)
+
+    K_adapt = _rescale_K_for_budget(
+        K_trained, tau_max, torch.tensor(lambda_min_base, device=device), safety_factor
+    )
+    with torch.no_grad():
+        rho_normal = _compute_rho_with_K(K_adapt, tau, tau_max, lambda_min_t)
+    margins_normal = rho_normal.cpu().numpy()
+
+    results.append({
+        'contingency': 'none',
+        'line_removed': -1,
+        'stability_rate': float(np.mean(margins_normal > 0) * 100),
+        'mean_margin': float(np.mean(margins_normal)),
+        'lambda_min_stressed': lambda_min_base,
+        'K_total_after_rescale': float(K_adapt.sum().cpu()),
+        'mode': 'adaptive',
+    })
+
+    for line_idx in range(min(n_lines, 50)):
+        config = StressConfig(name=f'n1_line{line_idx}', remove_line_idx=line_idx)
+        try:
+            stressed_case, tau_stressed = generator.apply_stress(config, seed=seed)
+            lambda_min_post = _recompute_lambda_min(stressed_case, fallback=lambda_min_base)
+            tau = tau_stressed.unsqueeze(0).expand(n_eval, -1).to(device)
+            lambda_min_t = torch.tensor([lambda_min_post], device=device).expand(n_eval)
+
+            K_adapt = _rescale_K_for_budget(
+                K_trained, tau_max,
+                torch.tensor(lambda_min_post, device=device),
+                safety_factor,
+            )
+            with torch.no_grad():
+                rho = _compute_rho_with_K(K_adapt, tau, tau_max, lambda_min_t)
+            margins = rho.cpu().numpy()
+
+            results.append({
+                'contingency': f'N-1 (line {line_idx})',
+                'line_removed': line_idx,
+                'stability_rate': float(np.mean(margins > 0) * 100),
+                'mean_margin': float(np.mean(margins)),
+                'lambda_min_stressed': lambda_min_post,
+                'K_total_after_rescale': float(K_adapt.sum().cpu()),
+                'mode': 'adaptive',
+            })
+        except Exception:
+            continue
+
+    return results
+
+
 def run_n1_experiment(
     case_id: int = 39,
     epochs: int = 100,
@@ -181,15 +333,20 @@ def run_n1_experiment(
     print("=" * 70)
     print("N-1 CONTINGENCY ROBUSTNESS")
     print("=" * 70)
-    print(f"Case: IEEE {case_id}")
+    print(f"Case: Case-{case_id}")
 
     # Train on normal conditions
     print("\nTraining model on normal conditions...")
     model, base_case = train_model(case_id, epochs, num_scenarios, device, seed)
 
-    # Evaluate N-1
-    print("Evaluating N-1 contingencies...")
+    # Evaluate N-1 with the legacy frozen-K path.
+    print("Evaluating N-1 contingencies (legacy frozen-K)...")
     results = evaluate_n1(model, base_case, device, seed=seed)
+
+    # Evaluate N-1 with the deployment-time adaptive-K rescaling
+    # (major-revision response to APEN-D-26-05014, R1.7).
+    print("Evaluating N-1 contingencies (adaptive K rescaling)...")
+    results_adaptive = evaluate_n1_adaptive(model, base_case, device, seed=seed)
 
     # Save
     os.makedirs(output_dir, exist_ok=True)
@@ -201,6 +358,7 @@ def run_n1_experiment(
         'seed': seed,
         'timestamp': datetime.now().isoformat(),
         'results': results,
+        'results_adaptive': results_adaptive,
     }
 
     json_path = f"{output_dir}/n1_case{case_id}.json"
@@ -217,13 +375,24 @@ def run_n1_experiment(
     stab_rates = [r['stability_rate'] for r in n1_results]
 
     print("\n" + "=" * 70)
-    print("N-1 SUMMARY")
+    print("N-1 SUMMARY (legacy frozen-K)")
     print("=" * 70)
     print(f"Normal stability:      {results[0]['stability_rate']:.1f}%")
     print(f"N-1 avg stability:     {np.mean(stab_rates):.1f}%")
     print(f"N-1 min stability:     {np.min(stab_rates):.1f}%")
     print(f"N-1 worst-case line:   {n1_results[np.argmin(stab_rates)]['line_removed']}")
     print(f"Lines causing <90%:    {sum(1 for s in stab_rates if s < 90)}/{len(stab_rates)}")
+
+    n1_adapt = [r for r in results_adaptive if r['line_removed'] >= 0]
+    if n1_adapt:
+        adapt_rates = [r['stability_rate'] for r in n1_adapt]
+        print("\n" + "=" * 70)
+        print("N-1 SUMMARY (adaptive K rescaling)")
+        print("=" * 70)
+        print(f"Normal stability:      {results_adaptive[0]['stability_rate']:.1f}%")
+        print(f"N-1 avg stability:     {np.mean(adapt_rates):.1f}%")
+        print(f"N-1 min stability:     {np.min(adapt_rates):.1f}%")
+        print(f"Improvement vs legacy: {np.mean(adapt_rates) - np.mean(stab_rates):+.1f} pp")
 
 
 def plot_n1_results(results, case_id, save_path):

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🚀 Created on 01/15/2025🚀
+🚀 Created on 01/15/2026🚀
 
 Author: Franck Aboya
-Email: mesabo18@gmail.com / messouaboya17@gmail.com
+Email: franckjunioraboya.messou@ieee.org
 Github: https://github.com/mesabo
 Univ: Hosei University, PhD
 Dept: Science and Engineering
@@ -12,7 +12,7 @@ Lab: Prof YU Keping's Lab
 """
 
 """
-Generate All Publication-Ready Figures for IEEE Trans. Smart Grid
+Generate All Publication-Ready Figures for Applied Energy
 
 Loads results from results/full_sweep/ subdirectories:
 - baselines/case{X}/comparison_results.json
@@ -28,7 +28,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-# IEEE publication style — bold, high-contrast
+# Publication style — bold, high-contrast
 plt.rcParams.update({
     'font.family': 'serif',
     'font.size': 11,
@@ -78,7 +78,14 @@ COLORS = {
     'ablation': '#E91E63',
 }
 
+# Naming scheme (locked 2026-04-29): the published winner is `Ours`; the four
+# internal-progression variants are `Ours-v1`..`Ours-v4`. v1=full+uniform K_init,
+# v2=lite+uniform, v3=full+analytic, v4=lite+analytic; Ours = v4 + stronger L1.
 MODEL_COLORS = {
+    'JointOptimizer_Lever3_Lite_Strong': '#d62728',
+    'JointOptimizer_Lever3_Lite': '#ff7f0e',
+    'JointOptimizer_Lever3': '#2ca02c',
+    'JointOptimizer_Lite': '#9467bd',
     'JointOptimizer': COLORS['proposed'],
     'B1_SequentialOPFQoS': COLORS['sequential'],
     'B2_MLPJoint': COLORS['mlp'],
@@ -87,10 +94,17 @@ MODEL_COLORS = {
     'B5_CNNJoint': COLORS['cnn'],
     'B6_VanillaTransformer': COLORS['vanilla'],
     'B7_TransformerNoCoupling': COLORS['ablation'],
+    'B10_LinearMPC': '#8c564b',
+    'B11_SmithPredictor': '#e377c2',
+    'B12_NeuralMPC': '#7f7f7f',
 }
 
 MODEL_SHORT = {
-    'JointOptimizer': 'Ours',
+    'JointOptimizer_Lever3_Lite_Strong': 'Ours',
+    'JointOptimizer_Lever3_Lite': 'Ours-v4',
+    'JointOptimizer_Lever3': 'Ours-v3',
+    'JointOptimizer_Lite': 'Ours-v2',
+    'JointOptimizer': 'Ours-v1',
     'B1_SequentialOPFQoS': 'B1',
     'B2_MLPJoint': 'B2',
     'B3_GNNOnly': 'B3',
@@ -98,14 +112,23 @@ MODEL_SHORT = {
     'B5_CNNJoint': 'B5',
     'B6_VanillaTransformer': 'B6',
     'B7_TransformerNoCoupling': 'B7',
+    'B10_LinearMPC': 'B10',
+    'B11_SmithPredictor': 'B11',
+    'B12_NeuralMPC': 'B12',
 }
 
 MODEL_ORDER = [
-    'JointOptimizer', 'B1_SequentialOPFQoS', 'B2_MLPJoint', 'B3_GNNOnly',
+    'JointOptimizer_Lever3_Lite_Strong',  # Ours (winner)
+    'JointOptimizer_Lever3_Lite',         # Ours-v4
+    'JointOptimizer_Lever3',              # Ours-v3
+    'JointOptimizer_Lite',                # Ours-v2
+    'JointOptimizer',                     # Ours-v1
+    'B1_SequentialOPFQoS', 'B2_MLPJoint', 'B3_GNNOnly',
     'B4_LSTMJoint', 'B5_CNNJoint', 'B6_VanillaTransformer', 'B7_TransformerNoCoupling',
+    'B10_LinearMPC', 'B11_SmithPredictor', 'B12_NeuralMPC',
 ]
 
-IEEE_CASES = [14, 30, 39, 57, 118]
+STD_CASES = [14, 30, 39, 57, 118]
 
 
 def load_json(path):
@@ -118,8 +141,16 @@ def load_json(path):
 
 
 def get_baselines(results_dir, case):
-    """Load baselines comparison results for a case."""
-    return load_json(f'{results_dir}/baselines/case{case}/comparison_results.json')
+    """Load baselines comparison results for a case.
+
+    Tries two layouts: legacy ``{results_dir}/baselines/case{C}/...`` first,
+    then the canonical sweep layout ``{results_dir}/case{C}/...``. Falls back
+    to ``None`` so callers can ``[SKIP]`` cleanly.
+    """
+    return (
+        load_json(f'{results_dir}/baselines/case{case}/comparison_results.json')
+        or load_json(f'{results_dir}/case{case}/comparison_results.json')
+    )
 
 
 
@@ -151,7 +182,7 @@ def generate_k_learning_comparison(results_dir, output_dir, cases):
                label=MODEL_SHORT.get(model, model),
                color=color, edgecolor='black', linewidth=0.5)
 
-    ax.set_xlabel('IEEE Test Case')
+    ax.set_xlabel('Case')
     ax.set_ylabel('Coupling Constant K')
     ax.set_xticks(x)
     ax.set_xticklabels([f'{c}-Bus' for c in cases])
@@ -205,7 +236,7 @@ def generate_radar_chart_all_baselines(results_dir, output_dir, case=39):
         # Fallback: single case
         data = get_baselines(results_dir, case)
         if not data:
-            print(f"  [SKIP] IEEE {case} results not found")
+            print(f"  [SKIP] Case-{case} results not found")
             return
         agg = data['aggregated_results']
         for m in MODEL_ORDER:
@@ -298,7 +329,7 @@ def generate_radar_chart_all_baselines(results_dir, output_dir, case=39):
                        fontsize=9, framealpha=0.95,
                        prop={'weight': 'bold', 'size': 9}, ncol=4,
                        edgecolor='black', columnspacing=0.8)
-    ax.set_title(f'Multi-Case Baseline Comparison (avg. IEEE {", ".join(str(c) for c in multi_cases)}-Bus)',
+    ax.set_title(f'Multi-Case Baseline Comparison (avg. Cases {", ".join(str(c) for c in multi_cases)}-Bus)',
                  y=1.08, fontsize=12, fontweight='bold')
 
     plt.savefig(f'{output_dir}/fig_radar_all_baselines.pdf', dpi=300,
@@ -503,7 +534,7 @@ def generate_attention_maps(output_dir, case=39, results_dir='results/full_sweep
         for ax in ax_row:
             ax.tick_params(labelsize=8)
 
-    fig.suptitle(f'Attention Mechanism Visualization (IEEE {case}-Bus)',
+    fig.suptitle(f'Attention Mechanism Visualization (Case-{case}-Bus)',
                  fontsize=14, fontweight='bold', y=1.02)
     plt.tight_layout()
     plt.savefig(f'{output_dir}/fig_attention_maps.pdf', dpi=300, bbox_inches='tight')
@@ -567,7 +598,7 @@ def generate_per_head_attention(output_dir, case=39, results_dir='results/full_s
         r, c = divmod(h, cols)
         axes[r][c].set_visible(False)
 
-    fig.suptitle(f'Cross-Domain Attention Per Head (IEEE {case}-Bus)',
+    fig.suptitle(f'Cross-Domain Attention Per Head (Case-{case}-Bus)',
                  fontsize=13, fontweight='bold', y=1.02)
     plt.tight_layout()
     plt.savefig(f'{output_dir}/fig_attention_per_head.pdf', dpi=300, bbox_inches='tight')
@@ -576,7 +607,7 @@ def generate_per_head_attention(output_dir, case=39, results_dir='results/full_s
 
 
 def generate_embedding_space(output_dir, results_dir='results/full_sweep'):
-    """Fig 13: PCA + cosine similarity for all IEEE cases (2x4 grid)."""
+    """Fig 13: PCA + cosine similarity for all transmission-grid cases (2x4 grid)."""
     import torch
     from numpy.linalg import norm
 
@@ -669,7 +700,7 @@ def generate_embedding_space(output_dir, results_dir='results/full_sweep'):
         for txt in leg.get_texts():
             txt.set_fontweight('bold')
             txt.set_color('black')
-        ax.set_title(f'IEEE {case}-Bus', fontsize=12, fontweight='bold',
+        ax.set_title(f'Case-{case}-Bus', fontsize=12, fontweight='bold',
                      color='black',
                      bbox=dict(boxstyle='round,pad=0.3',
                                facecolor=case_colors[col], alpha=0.15,
@@ -726,7 +757,7 @@ def _run_model_inference(model, sample, impedance):
 
 
 def generate_multi_case_attention(output_dir, results_dir='results/full_sweep'):
-    """Fig 14: Cross-domain attention maps compared across IEEE cases (14, 39, 57, 118)."""
+    """Fig 14: Cross-domain attention maps compared across transmission-grid cases (14, 39, 57, 118)."""
     import torch
 
     vis_cases = [14, 39, 57, 118]
@@ -759,7 +790,7 @@ def generate_multi_case_attention(output_dir, results_dir='results/full_sweep'):
                 cross_np = cross[0].cpu().numpy() if cross.dim() == 3 else cross.cpu().numpy()
             im = axes[0, col].imshow(cross_np, cmap='Oranges', aspect='auto')
             plt.colorbar(im, ax=axes[0, col], fraction=0.046, pad=0.04)
-        axes[0, col].set_title(f'IEEE {case}-Bus', fontsize=12, fontweight='bold')
+        axes[0, col].set_title(f'Case-{case}-Bus', fontsize=12, fontweight='bold')
         if col == 0:
             axes[0, col].set_ylabel('Cross-Domain Attention\nEnergy Query', fontsize=10, fontweight='bold')
 
@@ -846,7 +877,7 @@ def generate_attention_distribution(output_dir, results_dir='results/full_sweep'
         if idx % 2 == 0:
             ax.set_ylabel('Density', fontsize=10, fontweight='bold')
         ax.set_xlim(0, None)
-        ax.set_title(f'IEEE {case}-Bus', fontsize=12, fontweight='bold',
+        ax.set_title(f'Case-{case}-Bus', fontsize=12, fontweight='bold',
                      color='black',
                      bbox=dict(boxstyle='round,pad=0.3',
                                facecolor=case_colors[idx], alpha=0.15,
@@ -866,7 +897,7 @@ def generate_attention_distribution(output_dir, results_dir='results/full_sweep'
 
 
 def generate_physics_mask_overlay(output_dir, results_dir='results/full_sweep'):
-    """Fig 16: Physics mask vs learned attention — 4x4 grid: 4 IEEE cases x 4 panels."""
+    """Fig 16: Physics mask vs learned attention — 4x4 grid: 4 transmission-grid cases x 4 panels."""
     import torch
 
     vis_cases = [14, 39, 57, 118]
@@ -946,7 +977,7 @@ def generate_physics_mask_overlay(output_dir, results_dir='results/full_sweep'):
                                     edgecolor='black', alpha=0.95))
 
         # Row label
-        axes[row, 0].set_ylabel(f'IEEE {c}-Bus', fontsize=13, fontweight='bold')
+        axes[row, 0].set_ylabel(f'Case-{c}-Bus', fontsize=13, fontweight='bold')
 
         # Axis labels
         for col in range(4):
@@ -954,7 +985,7 @@ def generate_physics_mask_overlay(output_dir, results_dir='results/full_sweep'):
             if row == 0:
                 axes[row, col].set_title(col_titles[col], fontsize=12, fontweight='bold')
 
-    fig.suptitle('Physics Mask vs Learned Attention Across IEEE Cases',
+    fig.suptitle('Physics Mask vs Learned Attention Across Transmission-Grid Cases',
                  fontsize=16, fontweight='bold', y=1.02)
     plt.tight_layout()
     plt.savefig(f'{output_dir}/fig_physics_mask_overlay.pdf', dpi=300, bbox_inches='tight')
@@ -963,7 +994,7 @@ def generate_physics_mask_overlay(output_dir, results_dir='results/full_sweep'):
 
 
 def generate_tsne_embeddings(output_dir, results_dir='results/full_sweep'):
-    """Fig 17: t-SNE of dual-domain embeddings across multiple IEEE cases."""
+    """Fig 17: t-SNE of dual-domain embeddings across multiple transmission-grid cases."""
     import torch
     try:
         from sklearn.manifold import TSNE
@@ -1030,7 +1061,7 @@ def generate_tsne_embeddings(output_dir, results_dir='results/full_sweep'):
         except (ImportError, Exception):
             pass  # scipy not available or degenerate hull
 
-        ax.set_title(f'IEEE {case}-Bus ({dataset.get_base_case()["n_buses"]} nodes)',
+        ax.set_title(f'Case-{case}-Bus ({dataset.get_base_case()["n_buses"]} nodes)',
                      fontsize=13, fontweight='bold')
         ax.set_xlabel('t-SNE 1', fontsize=11, fontweight='bold')
         if idx % 2 == 0:
@@ -1109,7 +1140,7 @@ def generate_graph_attention_topology(output_dir, results_dir='results/full_swee
         nx.draw_networkx_edges(G, pos, ax=axes[0], edge_color='#555555', alpha=0.7, width=1.2)
         nx.draw_networkx_labels(G, pos, ax=axes[0], font_size=label_size, font_color='white',
                                 font_weight='bold')
-        axes[0].set_title(f'(a) IEEE {case}-Bus Topology\n({n_gen} generators, {n_buses} buses)',
+        axes[0].set_title(f'(a) Case-{case}-Bus Topology\n({n_gen} generators, {n_buses} buses)',
                           fontsize=13, fontweight='bold')
         legend_elems = [Line2D([0], [0], marker='o', color='w', markerfacecolor='#C0392B',
                                markersize=12, markeredgecolor='black', markeredgewidth=1,
@@ -1200,7 +1231,7 @@ def generate_graph_attention_topology(output_dir, results_dir='results/full_swee
         for ax in axes:
             ax.set_axis_off()
 
-        fig.suptitle(f'Grid Topology and Attention Structure (IEEE {case}-Bus)',
+        fig.suptitle(f'Grid Topology and Attention Structure (Case-{case}-Bus)',
                      fontsize=15, fontweight='bold', y=1.02)
         plt.tight_layout()
         plt.savefig(f'{output_dir}/fig_graph_attention_topology_case{case}.pdf', dpi=300, bbox_inches='tight')
@@ -1209,7 +1240,7 @@ def generate_graph_attention_topology(output_dir, results_dir='results/full_swee
 
 
 def generate_graph_attention_topology_combined(output_dir, results_dir='results/full_sweep'):
-    """Fig 18b: All 4 IEEE cases in a single 4x3 grid (rows=cases, cols=panels)."""
+    """Fig 18b: All 4 transmission-grid cases in a single 4x3 grid (rows=cases, cols=panels)."""
     import torch
     try:
         import networkx as nx
@@ -1351,7 +1382,7 @@ def generate_graph_attention_topology_combined(output_dir, results_dir='results/
     for col, title in enumerate(col_titles):
         axes[0, col].set_title(title, fontsize=14, fontweight='bold')
 
-    fig.suptitle('Grid Topology and Attention Structure Across IEEE Cases',
+    fig.suptitle('Grid Topology and Attention Structure Across Transmission-Grid Cases',
                  fontsize=16, fontweight='bold', y=1.01)
     plt.tight_layout()
 
@@ -1362,7 +1393,7 @@ def generate_graph_attention_topology_combined(output_dir, results_dir='results/
         bbox = axes[row, 0].get_position()
         y_center = (bbox.y0 + bbox.y1) / 2
         # Draw colored banner text on the far left
-        fig.text(0.01, y_center, f'IEEE\n{case}-Bus',
+        fig.text(0.01, y_center, f'Case-{case}',
                  fontsize=15, fontweight='bold', color='white',
                  ha='center', va='center', rotation=90,
                  bbox=dict(boxstyle='round,pad=0.4', facecolor=row_colors[row],
@@ -1381,8 +1412,8 @@ def main():
                         help='Results directory (default: results/full_sweep)')
     parser.add_argument('--output', default='docs/figures/publication',
                         help='Output directory for figures')
-    parser.add_argument('--cases', nargs='+', type=int, default=IEEE_CASES,
-                        help='IEEE cases to include')
+    parser.add_argument('--cases', nargs='+', type=int, default=STD_CASES,
+                        help='Cases to include')
     args = parser.parse_args()
 
     results_dir = args.results
@@ -1402,8 +1433,9 @@ def main():
     print(f"\n[1/{total}] K learning comparison...")
     generate_k_learning_comparison(results_dir, output_dir, cases)
 
-    print(f"\n[2/{total}] Radar chart (all 8 methods)...")
-    generate_radar_chart_all_baselines(results_dir, output_dir, case=39)
+    # Radar chart removed (R5 reviewer concern: normalized axes were
+    # inconsistent with table values). Quantitative comparisons live in
+    # tables 1-5 with raw numbers.
 
     print(f"\n[3/{total}] Attention maps (4-panel)...")
     generate_attention_maps(output_dir, case=39, results_dir=results_dir)

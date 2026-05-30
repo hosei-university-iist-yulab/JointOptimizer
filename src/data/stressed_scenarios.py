@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🚀 Created on 01/22/2025🚀
+🚀 Created on 01/22/2026🚀
 
 Author: Franck Aboya
-Email: mesabo18@gmail.com / messouaboya17@gmail.com
+Email: franckjunioraboya.messou@ieee.org
 Github: https://github.com/mesabo
 Univ: Hosei University, PhD
 Dept: Science and Engineering
@@ -44,13 +44,26 @@ class StressConfig:
     delay_alpha: float = 1.5  # Pareto shape parameter
 
 
-# Predefined stress scenarios
+# Predefined stress scenarios.
+# Major-revision update (APEN-D-26-05014, R4.8): the load-factor sweep was
+# extended from the original +/-20 % range to +/-50 % so the stress test
+# matches realistic daily load variation in transmission systems.
 STRESS_SCENARIOS = {
     'normal': StressConfig(name='normal'),
+    # Underload sweep (50 %, 60 %, 70 %, 80 %, 90 %).
+    'load_050': StressConfig(name='load_050', load_factor=0.50),
+    'load_060': StressConfig(name='load_060', load_factor=0.60),
+    'load_070': StressConfig(name='load_070', load_factor=0.70),
+    'load_080': StressConfig(name='load_080', load_factor=0.80),
+    'load_090': StressConfig(name='load_090', load_factor=0.90),
+    # Overload sweep (105 % through 150 %).
     'load_105': StressConfig(name='load_105', load_factor=1.05),
     'load_110': StressConfig(name='load_110', load_factor=1.10),
     'load_115': StressConfig(name='load_115', load_factor=1.15),
     'load_120': StressConfig(name='load_120', load_factor=1.20),
+    'load_130': StressConfig(name='load_130', load_factor=1.30),
+    'load_140': StressConfig(name='load_140', load_factor=1.40),
+    'load_150': StressConfig(name='load_150', load_factor=1.50),
     'n1': StressConfig(name='n1', remove_n_lines=1),
     'n2': StressConfig(name='n2', remove_n_lines=2),
     'delay_300': StressConfig(name='delay_300', tau_ms_override=300.0),
@@ -65,6 +78,15 @@ STRESS_SCENARIOS = {
     'combined_severe': StressConfig(
         name='combined_severe', load_factor=1.20,
         tau_ms_override=500.0, remove_n_lines=2
+    ),
+    # +/-50 % combined edge cases for revision robustness reporting.
+    'combined_underload_severe': StressConfig(
+        name='combined_underload_severe', load_factor=0.50,
+        tau_ms_override=500.0, remove_n_lines=1
+    ),
+    'combined_overload_severe': StressConfig(
+        name='combined_overload_severe', load_factor=1.50,
+        tau_ms_override=500.0, remove_n_lines=1
     ),
 }
 

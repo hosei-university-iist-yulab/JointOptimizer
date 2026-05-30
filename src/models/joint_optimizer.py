@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🚀 Created on 02/01/2025🚀
+🚀 Created on 02/01/2026🚀
 
 Author: Franck Aboya
-Email: mesabo18@gmail.com / messouaboya17@gmail.com
+Email: franckjunioraboya.messou@ieee.org
 Github: https://github.com/mesabo
 Univ: Hosei University, PhD
 Dept: Science and Engineering
@@ -37,7 +37,7 @@ from typing import Optional, Tuple, Dict, Any
 
 from .gnn import DualDomainGNN
 from .attention import HierarchicalAttention
-from .coupling import LearnableCouplingConstants
+from .coupling import LearnableCouplingConstants, AdaptiveKInit
 
 
 class ControlDecoder(nn.Module):
@@ -182,6 +182,11 @@ class JointOptimizer(nn.Module):
         use_physics_mask: bool = True,
         use_causal_mask: bool = True,
         use_cross_attention: bool = True,
+        mpc_horizon_ms: float = 0.0,
+        tau_max_seconds: float = 0.5,
+        use_adaptive_k_init: bool = False,
+        k_init_features: Optional[torch.Tensor] = None,
+        adaptive_k_safety_factor: float = 0.9,
     ):
         """
         Initialize the Joint Optimizer.
@@ -231,10 +236,24 @@ class JointOptimizer(nn.Module):
         )
         self.use_causal_mask = use_causal_mask
 
-        # Auto-scale K init if lambda_min_0 is provided
+        # Auto-scale K init if lambda_min_0 is provided.
+        # Lever 3 (MPC-horizon-aware init): when ``mpc_horizon_ms`` > 0, use
+        # B10's analytical formula K = (T_p / (2 * tau_max)) * |lambda_min| / n_g
+        # which is much smaller than the legacy uniform safety_factor=0.9
+        # init for short horizons. Falls back to the uniform formula when
+        # mpc_horizon_ms == 0.
         if lambda_min_0 is not None and k_init_scale == 0.1:
-            from .coupling import compute_k_init_scale
-            k_init_scale = compute_k_init_scale(n_generators, lambda_min_0)
+            if mpc_horizon_ms > 0.0:
+                tp_seconds = mpc_horizon_ms / 1000.0
+                k_init_scale = (
+                    (tp_seconds / (2.0 * tau_max_seconds))
+                    * abs(float(lambda_min_0))
+                    / max(n_generators, 1)
+                )
+                k_init_scale = max(min(k_init_scale, 1.0), 1e-6)
+            else:
+                from .coupling import compute_k_init_scale
+                k_init_scale = compute_k_init_scale(n_generators, lambda_min_0)
 
         # Learnable coupling constants
         self.coupling = LearnableCouplingConstants(
@@ -242,6 +261,44 @@ class JointOptimizer(nn.Module):
             init_scale=k_init_scale,
             learnable=learnable_k,
         )
+
+        # R1.10: optional adaptive K_init via softmax-MLP over per-generator
+        # features. When enabled, replaces the uniform log_K initialization
+        # with a per-generator vector log(s * |lambda_min_0| * w_i) that
+        # preserves the budget Sum_i K_i = s * |lambda_min_0|. The host
+        # model's optimizer then continues to learn log_K from this prior.
+        # When combined with lever 3 (mpc_horizon_ms > 0), the safety factor
+        # is derived from the horizon-aware budget T_p / (2 * tau_max) so the
+        # per-generator init shrinks to match B10's analytical K_i scale.
+        self.use_adaptive_k_init = bool(use_adaptive_k_init)
+        if self.use_adaptive_k_init and lambda_min_0 is not None:
+            feat_dim = (
+                int(k_init_features.shape[-1])
+                if (k_init_features is not None and k_init_features.dim() >= 2)
+                else 4
+            )
+            if mpc_horizon_ms > 0.0:
+                tp_seconds = mpc_horizon_ms / 1000.0
+                effective_safety = max(min(
+                    tp_seconds / (2.0 * tau_max_seconds), 0.9,
+                ), 1e-6)
+            else:
+                effective_safety = adaptive_k_safety_factor
+            self.adaptive_k_init = AdaptiveKInit(
+                n_generators=n_generators,
+                feature_dim=feat_dim,
+                safety_factor=effective_safety,
+                learnable=learnable_k,
+            )
+            if k_init_features is not None:
+                self.adaptive_k_init.set_features(k_init_features)
+            with torch.no_grad():
+                lam = torch.tensor(abs(float(lambda_min_0)), dtype=torch.float32)
+                k_vec = self.adaptive_k_init(lam)            # [n_gen]
+                k_vec = torch.clamp(k_vec, min=1e-8)
+                self.coupling.log_K.copy_(torch.log(k_vec))
+        else:
+            self.adaptive_k_init = None
 
         # Default tau_max (can be updated)
         self.register_buffer('tau_max_default', torch.ones(n_generators) * 500.0)  # ms
@@ -276,6 +333,9 @@ class JointOptimizer(nn.Module):
             'use_physics_mask': use_physics_mask,
             'use_causal_mask': use_causal_mask,
             'use_cross_attention': use_cross_attention,
+            'mpc_horizon_ms': mpc_horizon_ms,
+            'tau_max_seconds': tau_max_seconds,
+            'use_adaptive_k_init': self.use_adaptive_k_init,
         }
 
     def forward(

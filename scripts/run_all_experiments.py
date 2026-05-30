@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🚀 Created on 01/16/2025🚀
+🚀 Created on 01/16/2026🚀
 
 Author: Franck Aboya
-Email: mesabo18@gmail.com / messouaboya17@gmail.com
+Email: franckjunioraboya.messou@ieee.org
 Github: https://github.com/mesabo
 Univ: Hosei University, PhD
 Dept: Science and Engineering
@@ -40,11 +40,22 @@ from pathlib import Path
 from typing import List, Optional
 
 PROJECT_ROOT = Path(__file__).parent.parent
-GPUS = [5, 6]  # Conservative: 2 GPUs on shared server
-IEEE_CASES = [14, 30, 39, 57, 118]
+DEFAULT_GPUS = [5, 6, 7]
+GPUS = list(DEFAULT_GPUS)  # rebound by main() from --gpus
+TEST_CASES = [14, 30, 39, 57, 118, 300]
 SYNTHETIC_CASES = [10000]
-ALL_CASES = IEEE_CASES + SYNTHETIC_CASES
+ALL_CASES = TEST_CASES
 RESULTS_ROOT = PROJECT_ROOT / "results" / "full_sweep"
+
+# Tier controls epochs, seeds, and case scope for the whole run.
+# - smoke: 1 epoch, 1 seed, 1 case (case-14) — sanity check before launch
+# - quick: 50 epochs, 2 seeds, hardest cases (118, 300) — verification tier
+# - full: full epoch table, 5 seeds, all 6 test cases — publication tier
+TIERS = {
+    "smoke": {"epoch_cap": 1, "seeds": 1, "cases": [14]},
+    "quick": {"epoch_cap": 50, "seeds": 2, "cases": [118, 300]},
+    "full":  {"epoch_cap": None, "seeds": 5, "cases": ALL_CASES},
+}
 
 
 @dataclass
@@ -71,15 +82,19 @@ def get_batch_size(case_id: int) -> int:
     return 2 if case_id >= 1000 else 32
 
 
-def build_jobs() -> List[Job]:
-    """Build the full job matrix."""
+def build_jobs(tier: str = "full") -> List[Job]:
+    """Build the full job matrix at the requested tier (smoke|quick|full)."""
     jobs = []
+    cfg = TIERS[tier]
+    cases = cfg["cases"]
+    epoch_cap = cfg["epoch_cap"]
+    seeds = cfg["seeds"]
 
     # =====================================================================
     # PHASE 1: Independent experiments (self-training)
     # =====================================================================
-    for case in ALL_CASES:
-        epochs = get_epochs(case)
+    for case in cases:
+        epochs = get_epochs(case, cap=epoch_cap)
         scenarios = get_scenarios(case)
         batch = get_batch_size(case)
         out = f"results/full_sweep"
@@ -101,7 +116,7 @@ def build_jobs() -> List[Job]:
             name=f"baselines_case{case}",
             script="scripts/run_baseline_comparison.py",
             args=["--case", str(case), "--epochs", str(get_epochs(case, 200)),
-                  "--scenarios", str(scenarios), "--seeds", "5",
+                  "--scenarios", str(scenarios), "--seeds", str(seeds),
                   "--output", f"{out}/baselines/case{case}"],
             priority=2, phase=1,
         ))
@@ -111,7 +126,7 @@ def build_jobs() -> List[Job]:
             name=f"ablation_case{case}",
             script="experiments/run_ablation.py",
             args=["--cases", str(case), "--epochs", str(get_epochs(case, 100)),
-                  "--scenarios", str(scenarios), "--seeds", "3",
+                  "--scenarios", str(scenarios), "--seeds", str(max(2, seeds)),
                   "--output", f"{out}/ablation/case{case}"],
             priority=2, phase=1,
         ))
@@ -121,7 +136,7 @@ def build_jobs() -> List[Job]:
             name=f"gamma_case{case}",
             script="experiments/gamma_sweep.py",
             args=["--case", str(case), "--epochs", str(get_epochs(case, 100)),
-                  "--scenarios", str(scenarios), "--seeds", "3",
+                  "--scenarios", str(scenarios), "--seeds", str(max(2, seeds)),
                   "--output", f"{out}/gamma_sweep/case{case}"],
             priority=1, phase=1,
         ))
@@ -131,7 +146,7 @@ def build_jobs() -> List[Job]:
             name=f"k_init_case{case}",
             script="experiments/k_init_sensitivity.py",
             args=["--case", str(case), "--epochs", str(get_epochs(case, 200)),
-                  "--seeds", "3",
+                  "--seeds", str(max(2, seeds)),
                   "--output", f"{out}/k_init/case{case}"],
             priority=1, phase=1,
         ))
@@ -186,9 +201,9 @@ def build_jobs() -> List[Job]:
         ))
 
     # =====================================================================
-    # Theory / validation (lightweight, IEEE cases only for eigenvalue-heavy)
+    # Theory / validation (lightweight, scoped to current tier's cases)
     # =====================================================================
-    for case in ALL_CASES:
+    for case in cases:
         out = f"results/full_sweep"
 
         # Theorem 1 independent (DDE)
@@ -197,7 +212,7 @@ def build_jobs() -> List[Job]:
             script="experiments/validate_theorem1_independent.py",
             args=["--case", str(case),
                   "--delays", "50", "100", "200", "300", "400", "500",
-                  "--trials", "5",
+                  "--trials", str(max(2, seeds)),
                   "--output", f"{out}/theorem1_indep/case{case}"],
             priority=0, phase=1,
         ))
@@ -220,8 +235,8 @@ def build_jobs() -> List[Job]:
             priority=0, phase=1,
         ))
 
-    # --- Inference benchmark (all cases) ---
-    cases_str = ",".join(str(c) for c in ALL_CASES)
+    # --- Inference benchmark (current tier's cases) ---
+    cases_str = ",".join(str(c) for c in cases)
     jobs.append(Job(
         name="inference_benchmark",
         script="experiments/inference_benchmark.py",
@@ -233,7 +248,7 @@ def build_jobs() -> List[Job]:
     # =====================================================================
     # PHASE 2: Post-training experiments
     # =====================================================================
-    for case in ALL_CASES:
+    for case in cases:
         out = f"results/full_sweep"
 
         # Theorem 1 (model-based)
@@ -247,8 +262,20 @@ def build_jobs() -> List[Job]:
             priority=1, phase=2,
         ))
 
-    # --- Transfer learning ---
-    for source, target in [(39, 118), (118, 57), (14, 39), (39, 10000)]:
+    # --- Real-PMU CSV evaluation (IEEE DataPort PMU FREQUENCY archive) ---
+    # Uses the trained Strong checkpoint to evaluate the 4 attack scenarios
+    # (MITM, Resembling, Repetition, Missing) without retraining.
+    jobs.append(Job(
+        name="real_pmu_csv",
+        script="experiments/real_pmu_validation_csv.py",
+        args=["--output", "results/full_sweep/real_pmu"],
+        priority=0, phase=2,
+    ))
+
+    # --- Transfer learning (only for cases trained in this tier) ---
+    transfer_pairs = [(s, t) for s, t in [(39, 118), (118, 57), (14, 39)]
+                      if s in cases and t in cases]
+    for source, target in transfer_pairs:
         jobs.append(Job(
             name=f"transfer_{source}_to_{target}",
             script="scripts/run_transfer_learning.py",
@@ -260,13 +287,19 @@ def build_jobs() -> List[Job]:
         ))
 
     # =====================================================================
-    # PHASE 3: Aggregation
+    # PHASE 3: Aggregation (tables, figures, audit, PDF)
     # =====================================================================
+    # post_canonical_assemble.py is the single entry point that:
+    #   (1) audits the canonical JSONs against the expected case + model set,
+    #   (2) regenerates docs/tables/*.tex from results/full_sweep/baselines/,
+    #   (3) regenerates docs/figures/publication/fig_*.pdf,
+    #   (4) syncs the published table*.tex and fig_*.pdf into
+    #       paper/Applied-Energy/revision/{tables,figures}/,
+    #   (5) recompiles paper/Applied-Energy/revision/main.pdf.
     jobs.append(Job(
-        name="generate_tables",
-        script="scripts/generate_latex_tables.py",
-        args=["--results", "results/full_sweep",
-              "--output", "docs/tables"],
+        name="post_canonical_assemble",
+        script="scripts/post_canonical_assemble.py",
+        args=[],
         priority=0, phase=3,
     ))
 
@@ -389,6 +422,15 @@ def run_phase(jobs: List[Job], gpu_queue: GPUQueue, log_dir: Path,
 
 def main():
     parser = argparse.ArgumentParser(description="Run all experiments")
+    parser.add_argument("--tier", choices=list(TIERS), default="full",
+                        help="smoke=1ep/1seed/1case, quick=50ep/2seeds/[118,300], full=publication")
+    parser.add_argument("--gpus", type=str, default=",".join(map(str, DEFAULT_GPUS)),
+                        help=f"Comma-separated GPU indices (default: {DEFAULT_GPUS}). "
+                             "Repeat an index to give it more concurrent slots, "
+                             "e.g. '4,4,5,5,7' = 2 slots on GPU 4, 2 on GPU 5, 1 on GPU 7.")
+    parser.add_argument("--slots-per-gpu", type=int, default=3,
+                        help="Concurrent jobs per GPU index (default: 3). Cap memory "
+                             "by lowering this when other users share the GPU.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview jobs without running")
     parser.add_argument("--phase", type=int, default=0,
@@ -397,7 +439,13 @@ def main():
                         help="Skip already-completed jobs")
     args = parser.parse_args()
 
-    all_jobs = build_jobs()
+    global GPUS
+    GPUS = [int(g) for g in args.gpus.split(",") if g.strip()]
+    print(f"Tier: {args.tier} | Cases: {TIERS[args.tier]['cases']} | "
+          f"Seeds: {TIERS[args.tier]['seeds']} | "
+          f"Epoch cap: {TIERS[args.tier]['epoch_cap']} | GPUs: {GPUS}")
+
+    all_jobs = build_jobs(tier=args.tier)
     log_dir = RESULTS_ROOT / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -427,7 +475,7 @@ def main():
         print(f"GPUs: {GPUS}")
         return
 
-    gpu_queue = GPUQueue(GPUS)
+    gpu_queue = GPUQueue(GPUS, slots_per_gpu=args.slots_per_gpu)
     all_results = []
 
     phases = [1, 2, 3] if args.phase == 0 else [args.phase]

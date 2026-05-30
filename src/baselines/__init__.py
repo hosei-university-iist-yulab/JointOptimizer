@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🚀 Created on 02/03/2025🚀
+🚀 Created on 02/03/2026🚀
 
 Author: Franck Aboya
-Email: mesabo18@gmail.com / messouaboya17@gmail.com
+Email: franckjunioraboya.messou@ieee.org
 Github: https://github.com/mesabo
 Univ: Hosei University, PhD
 Dept: Science and Engineering
@@ -26,6 +26,11 @@ Required baselines from REQUIREMENTS.md:
 V2 additions:
 - B8: Heterogeneous GNN (Q3.1)
 - B9: DeepOPF (Q5.2)
+
+Major-revision additions (APEN-D-26-05014, R1.5):
+- B10: Linear MPC with delay compensation
+- B11: Smith predictor
+- B12: Neural-MPC (offline-trained policy)
 """
 
 from .sequential_opf import SequentialOPFQoS
@@ -37,6 +42,9 @@ from .vanilla_transformer import VanillaTransformer
 from .transformer_no_coupling import TransformerNoCoupling
 from .heterogeneous_gnn import HeterogeneousGNN
 from .deepopf import DeepOPF
+from .mpc_delay_comp import LinearMPCDelayCompensation
+from .smith_predictor import SmithPredictor
+from .neural_mpc import NeuralMPC
 
 __all__ = [
     "SequentialOPFQoS",
@@ -48,4 +56,7 @@ __all__ = [
     "TransformerNoCoupling",
     "HeterogeneousGNN",
     "DeepOPF",
+    "LinearMPCDelayCompensation",
+    "SmithPredictor",
+    "NeuralMPC",
 ]

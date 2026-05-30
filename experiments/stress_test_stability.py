@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🚀 Created on 01/11/2025🚀
+🚀 Created on 01/11/2026🚀
 
 Author: Franck Aboya
-Email: mesabo18@gmail.com / messouaboya17@gmail.com
+Email: franckjunioraboya.messou@ieee.org
 Github: https://github.com/mesabo
 Univ: Hosei University, PhD
 Dept: Science and Engineering
@@ -51,6 +51,9 @@ from src.baselines import (
     CNNJoint,
     VanillaTransformer,
     TransformerNoCoupling,
+    LinearMPCDelayCompensation,
+    SmithPredictor,
+    NeuralMPC,
 )
 from src.data import create_dataloaders, DelayConfig
 from src.data.stressed_scenarios import (
@@ -63,7 +66,9 @@ from src.losses.coupling_loss import simple_stability_loss
 from src.utils.statistical_tests import set_all_seeds, restrict_gpus
 
 
-# Models to evaluate
+# Models to evaluate.
+# Major-revision (lever 1, R1.5): B10/B11/B12 added so the stress test
+# surfaces the comparison the reviewer asked for.
 MODEL_NAMES = [
     "JointOptimizer",
     "B1_SequentialOPFQoS",
@@ -73,21 +78,45 @@ MODEL_NAMES = [
     "B5_CNNJoint",
     "B6_VanillaTransformer",
     "B7_TransformerNoCoupling",
+    "B10_LinearMPC",
+    "B11_SmithPredictor",
+    "B12_NeuralMPC",
 ]
 
-# Stress scenarios to test
+# Stress scenarios to test.
+# Major-revision update (APEN-D-26-05014, R4.8): the load sweep now spans
+# 50 %--150 % of nominal so the stress test reflects realistic daily load
+# variation; combined +/-50 % scenarios with delays and N-1 outages are
+# included to expose the framework to the regime where reviewer concerns
+# about narrow operating envelopes apply.
 STRESS_NAMES = [
     'normal',
+    # +/-50 % load sweep
+    'load_050',
+    'load_060',
+    'load_070',
+    'load_080',
+    'load_090',
+    'load_105',
     'load_110',
+    'load_115',
     'load_120',
+    'load_130',
+    'load_140',
+    'load_150',
+    # Topology stress
     'n1',
     'n2',
+    # Delay stress
     'delay_300',
     'delay_500',
     'delay_1000',
     'pareto_delays',
+    # Combined regimes
     'combined_moderate',
     'combined_severe',
+    'combined_underload_severe',
+    'combined_overload_severe',
 ]
 
 
@@ -161,6 +190,33 @@ def create_model(
             gnn_layers=config['gnn_layers'],
             k_init_scale=config['k_init_scale'],
             lambda_min_0=lambda_min_0,
+        )
+    elif model_name == "B10_LinearMPC":
+        return LinearMPCDelayCompensation(
+            n_buses=n_buses,
+            n_generators=n_generators,
+            hidden_dim=config['hidden_dim'],
+            prediction_horizon_ms=config.get('mpc_horizon_ms', 200.0),
+            lambda_min_0=lambda_min_0,
+            k_init_scale=config['k_init_scale'],
+        )
+    elif model_name == "B11_SmithPredictor":
+        return SmithPredictor(
+            n_buses=n_buses,
+            n_generators=n_generators,
+            hidden_dim=config['hidden_dim'],
+            sigma_mismatch=config.get('smith_sigma', 0.05),
+            lambda_min_0=lambda_min_0,
+            k_init_scale=config['k_init_scale'],
+        )
+    elif model_name == "B12_NeuralMPC":
+        return NeuralMPC(
+            n_buses=n_buses,
+            n_generators=n_generators,
+            hidden_dim=config['hidden_dim'],
+            depth=config.get('neural_mpc_depth', 3),
+            lambda_min_0=lambda_min_0,
+            k_init_scale=config['k_init_scale'],
         )
     else:
         raise ValueError(f"Unknown model: {model_name}")
@@ -439,7 +495,12 @@ def plot_stress_degradation(
 ):
     """Line plot showing how stability degrades with increasing stress."""
     # Focus on load stress progression
-    load_stresses = ['normal', 'load_105', 'load_110', 'load_115', 'load_120']
+    load_stresses = [
+        'load_050', 'load_060', 'load_070', 'load_080', 'load_090',
+        'normal',
+        'load_105', 'load_110', 'load_115', 'load_120',
+        'load_130', 'load_140', 'load_150',
+    ]
     available = [s for s in load_stresses if any(r['stress'] == s for r in results)]
 
     if len(available) < 2:

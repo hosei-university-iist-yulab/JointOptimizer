@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🚀 Created on 01/31/2025🚀
+🚀 Created on 01/31/2026🚀
 
 Author: Franck Aboya
-Email: mesabo18@gmail.com / messouaboya17@gmail.com
+Email: franckjunioraboya.messou@ieee.org
 Github: https://github.com/mesabo
 Univ: Hosei University, PhD
 Dept: Science and Engineering
@@ -266,6 +266,117 @@ def compute_k_init_scale(
         return 0.1
     k_init = safety_factor * abs_lambda / n_generators
     return max(min(k_init, 1.0), 1e-6)
+
+
+class AdaptiveKInit(nn.Module):
+    """Adaptive per-generator K_init via softmax-MLP weighting (R1.10).
+
+    The major-revision response replaces the uniform formula
+    K_init = s * |lambda_min(0)| / n_g (which the reviewer flagged as a
+    'new bottle of old wine') with a data-driven redistribution
+
+        K_init,i = s * |lambda_min(0)| * w_i,
+        w_i = softmax( g_phi(M_i, D_i, deg(i), centrality(i)) ),
+
+    where g_phi is a small two-layer MLP. The softmax guarantees
+    Sum_i K_init,i = s * |lambda_min(0)| <= |lambda_min(0)| so the
+    budget-preservation invariant of Theorem 1 holds for any phi.
+
+    Per-generator features default to a four-vector
+    (M_i, D_i, deg(i), centrality(i)). When the host model lacks topology
+    metadata the loader supplies zero-filled features and the softmax
+    reduces to a near-uniform distribution, recovering the legacy
+    behaviour as a special case.
+    """
+
+    def __init__(
+        self,
+        n_generators: int,
+        feature_dim: int = 4,
+        hidden_dim: int = 16,
+        safety_factor: float = 0.9,
+        learnable: bool = True,
+    ):
+        super().__init__()
+        self.n_generators = int(n_generators)
+        self.feature_dim = int(feature_dim)
+        self.safety_factor = float(safety_factor)
+
+        layers = nn.Sequential(
+            nn.Linear(self.feature_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 1),
+        )
+        if not learnable:
+            for param in layers.parameters():
+                param.requires_grad_(False)
+        self.score_mlp = layers
+
+        # Default features: zeros => uniform softmax (matches legacy K_init).
+        self.register_buffer(
+            'default_features',
+            torch.zeros(self.n_generators, self.feature_dim),
+        )
+
+    def set_features(self, features: torch.Tensor) -> None:
+        """Override the per-generator feature vector (no grad)."""
+        feats = torch.as_tensor(features, dtype=self.default_features.dtype)
+        if feats.shape != self.default_features.shape:
+            raise ValueError(
+                f"AdaptiveKInit features shape {tuple(feats.shape)} != "
+                f"({self.n_generators}, {self.feature_dim})"
+            )
+        self.default_features.copy_(feats.detach())
+
+    def forward(
+        self,
+        lambda_min_0: torch.Tensor,
+        features: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Return the per-generator K_init vector [n_generators]."""
+        feats = features if features is not None else self.default_features
+        scores = self.score_mlp(feats).squeeze(-1)            # [n_gen]
+        weights = torch.softmax(scores, dim=-1)
+        k_total = self.safety_factor * torch.abs(lambda_min_0)
+        return k_total * weights
+
+
+def compute_adaptive_k_init(
+    n_generators: int,
+    lambda_min_0: float,
+    inertia: Optional[torch.Tensor] = None,
+    damping: Optional[torch.Tensor] = None,
+    degree: Optional[torch.Tensor] = None,
+    centrality: Optional[torch.Tensor] = None,
+    safety_factor: float = 0.9,
+) -> torch.Tensor:
+    """Convenience wrapper that produces a per-generator K_init vector.
+
+    Computes the adaptive distribution analytically from physical features
+    (no learning; uses the same softmax-over-features structure to give
+    the host pipeline a stronger prior than the uniform formula). Falls
+    back to the uniform K_init when no features are provided so the
+    function can be used as a drop-in replacement for
+    :func:`compute_k_init_scale` in scripts that expect a per-generator
+    vector instead of a scalar.
+    """
+    abs_lambda = abs(float(lambda_min_0))
+    if abs_lambda < 1e-10 or n_generators <= 0:
+        return torch.full((max(n_generators, 1),), 0.1)
+    feature_columns = []
+    for tensor in (inertia, damping, degree, centrality):
+        if tensor is None:
+            feature_columns.append(torch.zeros(n_generators))
+        else:
+            t = torch.as_tensor(tensor, dtype=torch.float32).flatten()
+            if t.numel() != n_generators:
+                feature_columns.append(torch.zeros(n_generators))
+            else:
+                feature_columns.append((t - t.mean()) / (t.std(unbiased=False) + 1e-6))
+    feats = torch.stack(feature_columns, dim=-1)              # [n_gen, 4]
+    score = feats.sum(dim=-1)
+    weights = torch.softmax(score, dim=-1)
+    return safety_factor * abs_lambda * weights
 
 
 class DelayMarginEstimator(nn.Module):

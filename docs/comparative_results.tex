@@ -1,0 +1,324 @@
+% ============================================================
+% COMPARATIVE RESULTS -- IEEE Trans. Smart Grid (Journal Extension)
+% Energy-Information Co-Optimization via Learnable Coupling
+% ============================================================
+%
+% PURPOSE
+% -------
+% This file is a standalone compilable reference document that pulls in
+% the auto-generated experiment tables (tables/table01 .. table10).
+% It does NOT hard-code any numerical results; all numbers come from
+% the \input-ed table files so they stay in sync with experiment reruns.
+%
+% After the K-scaling fix (k_init = safety_factor * |lambda_min| / n_gen),
+% the old SmartGridComm 2026 numbers are obsolete.  This document
+% supersedes the previous comparative_results.tex.
+%
+% MODELS (8 total)
+% ----------------
+% JointOptimizer (Ours), B1: Sequential OPF+QoS, B2: MLP Joint,
+% B3: GNN Only, B4: LSTM Joint, B5: CNN Joint,
+% B6: Vanilla Transformer, B7: Transformer No Coupling.
+% Additional baselines in specific tables: B8: HeteroGNN, B9: DeepOPF.
+%
+% IEEE TEST CASES (5 + synthetic)
+% -------------------------------
+% IEEE 14-bus, 30-bus, 39-bus, 57-bus, 118-bus.
+% Synthetic 10 000-bus used in selected experiments (inference, convergence).
+%
+% TRAINING ENVIRONMENT
+% --------------------
+% All experiments trained on GPU (CUDA).  K_init is auto-scaled per grid:
+%   k_init = safety_factor * |lambda_min| / n_gen
+%
+% COMPILE
+% -------
+%   pdflatex comparative_results.tex
+% ============================================================
+
+\documentclass[journal]{IEEEtran}
+
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{multirow}
+
+\begin{document}
+
+\title{Comparative Results Reference\\[4pt]
+\large IEEE Trans. Smart Grid -- Journal Extension}
+\author{Auto-generated tables from experiment pipeline}
+\maketitle
+
+% ============================================================
+\section*{How to use this document}
+% ============================================================
+Each section below includes one auto-generated table via
+\verb|\input{tables/tableXX_xxx.tex}| together with brief commentary
+explaining what the table measures, which experiments produced it,
+and what to look for when interpreting the numbers.
+
+All tables were generated after the K-scaling fix
+($K_{\mathrm{init}} = \mathit{safety\_factor} \cdot |\lambda_{\min}| / n_{\mathrm{gen}}$),
+and reflect 5 IEEE test cases (14, 30, 39, 57, 118-bus) with 8 models
+(JointOptimizer + B1--B7).  Training was performed on GPU (CUDA),
+not on CPU as in the earlier conference submission.
+
+
+% ============================================================
+\section{Table I -- Main Baseline Comparison}
+\label{sec:table01}
+% ============================================================
+
+\input{tables/table01_main_comparison.tex}
+
+\medskip\noindent\textbf{What it shows.}
+Stability rate (\%) and mean stability margin $\rho(\tau)$ (with standard
+deviation over 5 random seeds) for all 8 models across all 5 IEEE cases.
+This is the primary result table of the paper.
+
+\noindent\textbf{Key points.}
+\begin{itemize}
+  \item JointOptimizer achieves the highest $\rho(\tau)$ on every case.
+  \item All models achieve 100\% stability rate, so the differentiator is
+        the \emph{margin} above the stability threshold.
+  \item The improvement is most pronounced on larger grids where the
+        auto-scaled $K_{\mathrm{init}}$ matters most.
+\end{itemize}
+
+
+% ============================================================
+\section{Table II -- Ablation Study}
+\label{sec:table02}
+% ============================================================
+
+\input{tables/table02_ablation.tex}
+
+\medskip\noindent\textbf{What it shows.}
+Impact of individual architectural components on the stability margin,
+averaged across IEEE 14--118.  Ablated factors: coupling weight~$\alpha$,
+physics mask, causal mask, cross-attention, contrastive loss
+(Observation~1, formerly Theorem~2), and GNN depth.
+
+\noindent\textbf{Key points.}
+\begin{itemize}
+  \item The coupling weight $\alpha$ is the most influential hyperparameter;
+        disabling it ($\alpha=0$) recovers B7-level performance.
+  \item Physics mask, causal mask, and cross-attention show marginal
+        individual impact but contribute jointly (see contrastive ablation).
+  \item GNN depth shows diminishing returns beyond 2--3 layers.
+\end{itemize}
+
+
+% ============================================================
+\section{Table III -- Stress Test}
+\label{sec:table03}
+% ============================================================
+
+\input{tables/table03_stress_test.tex}
+
+\medskip\noindent\textbf{What it shows.}
+Stability rate under progressively stressed operating conditions: increased
+load (110\%, 120\% of nominal), combined moderate stress, and combined
+severe stress.
+
+\noindent\textbf{Key points.}
+\begin{itemize}
+  \item Evaluates robustness to out-of-distribution operating conditions.
+  \item Stressed scenarios combine increased load with degraded
+        communication quality.
+  \item Stability degradation under severe stress reveals which
+        architectures are most brittle.
+\end{itemize}
+
+
+% ============================================================
+\section{Table IV -- Transfer Learning}
+\label{sec:table04}
+% ============================================================
+
+\input{tables/table04_transfer.tex}
+
+\medskip\noindent\textbf{What it shows.}
+Cross-case generalization: a model trained on one IEEE case is evaluated
+zero-shot and after fine-tuning on a different case.  Reports
+$\rho(\tau)$ for both, stability rate, and relative improvement from
+fine-tuning.
+
+\noindent\textbf{Key points.}
+\begin{itemize}
+  \item Demonstrates that learned coupling structure transfers across
+        grid topologies.
+  \item Fine-tuning yields the largest improvement when source and target
+        cases differ substantially in size (e.g., 39 $\to$ 118).
+  \item Zero-shot transfer already preserves stability, confirming that
+        the physics-informed features generalize.
+\end{itemize}
+
+
+% ============================================================
+\section{Table V -- Inference Latency and Model Parameters}
+\label{sec:table05}
+% ============================================================
+
+\input{tables/table05_inference.tex}
+
+\medskip\noindent\textbf{What it shows.}
+Inference latency (mean, P95, P99 in milliseconds) and parameter count
+for JointOptimizer and selected baselines (B2, B3, B6, B8: HeteroGNN,
+B9: DeepOPF) across all IEEE cases including the 10\,000-bus synthetic grid.
+
+\noindent\textbf{Key points.}
+\begin{itemize}
+  \item JointOptimizer provides sub-50\,ms latency on cases up to
+        10\,000 buses, well within real-time SCADA requirements.
+  \item B8 (HeteroGNN) is orders of magnitude slower; B9 (DeepOPF) is
+        the fastest but with lower margin (see Table~I).
+  \item Parameter count scales modestly with grid size for
+        JointOptimizer compared to MLP-based approaches.
+\end{itemize}
+
+
+% ============================================================
+\section{Table VI -- Theorem 1 Validation}
+\label{sec:table06}
+% ============================================================
+
+\input{tables/table06_theorem1.tex}
+
+\medskip\noindent\textbf{What it shows.}
+Empirical validation of Theorem~1:
+$\rho(\tau) = |\lambda_{\min}(0)| - \sum_i K_i \cdot \tau_i / \tau_{\max,i}$.
+For each delay level (50--500\,ms), the predicted margin $\rho_{\mathrm{pred}}$
+is compared against the empirical stability rate across all 5 IEEE cases.
+
+\noindent\textbf{Key points.}
+\begin{itemize}
+  \item The theoretical bound holds tightly across all grid sizes.
+  \item Results use the auto-scaled $K_{\mathrm{init}}$, so the predicted
+        margins differ per case according to $|\lambda_{\min}|$ and
+        $n_{\mathrm{gen}}$.
+  \item Stability degrades gracefully with increasing delay, consistent
+        with the linear bound of Theorem~1.
+\end{itemize}
+
+
+% ============================================================
+\section{Table VII -- N-1 Contingency Analysis}
+\label{sec:table07}
+% ============================================================
+
+\input{tables/table07_n1_contingency.tex}
+
+\medskip\noindent\textbf{What it shows.}
+Stability rate and margin degradation under N-1 contingencies (single
+line outages) for each IEEE case.  Reports average and worst-case
+stability across all contingencies, plus the average margin after outage.
+
+\noindent\textbf{Key points.}
+\begin{itemize}
+  \item Smaller grids (14--57) maintain 100\% stability under all
+        single-line outages.
+  \item IEEE 118 shows vulnerability under N-1 contingency, indicating
+        that larger grids require contingency-aware training or
+        additional margin reserves.
+  \item This experiment is new to the journal extension and was not in
+        the SmartGridComm submission.
+\end{itemize}
+
+
+% ============================================================
+\section{Table VIII -- Delay Distribution Robustness}
+\label{sec:table08}
+% ============================================================
+
+\input{tables/table08_delay_dist.tex}
+
+\medskip\noindent\textbf{What it shows.}
+Stability rate and margin under five different delay distributions:
+lognormal, exponential, gamma, uniform, and Pareto.  Evaluated across
+all 5 IEEE cases.
+
+\noindent\textbf{Key points.}
+\begin{itemize}
+  \item Performance is robust across distribution types for cases
+        14--57.
+  \item Pareto delays (heavy-tailed) produce slightly higher margins on
+        smaller grids because most samples have low delay.
+  \item IEEE 118 is sensitive to delay distribution, with stability
+        dropping significantly under lognormal and gamma tails.
+  \item The Pareto distribution was added to \texttt{DelayConfig} via the
+        \texttt{pareto\_alpha} field for this journal extension.
+\end{itemize}
+
+
+% ============================================================
+\section{Table IX -- Convergence Analysis}
+\label{sec:table09}
+% ============================================================
+
+\input{tables/table09_convergence.tex}
+
+\medskip\noindent\textbf{What it shows.}
+Training data efficiency: minimum number of scenarios needed for
+$>$95\% stability, and stability margin at 100, 200, 300 training
+scenarios, plus the best achieved margin.
+
+\noindent\textbf{Key points.}
+\begin{itemize}
+  \item All cases reach $>$95\% stability with as few as 50 training
+        scenarios.
+  \item Margin continues to improve with more data, but with diminishing
+        returns after 200 scenarios.
+  \item IEEE 118 shows the largest gap between early and best margin,
+        indicating that larger grids benefit more from additional
+        training data.
+\end{itemize}
+
+
+% ============================================================
+\section{Table X -- Model Compression}
+\label{sec:table10}
+% ============================================================
+
+\input{tables/table10_compression.tex}
+
+\medskip\noindent\textbf{What it shows.}
+Effect of reducing the embedding dimension (and correspondingly the
+hidden dimension and number of attention heads) on stability margin
+and parameter count.
+
+\noindent\textbf{Key points.}
+\begin{itemize}
+  \item Stability margin is remarkably stable across a wide range of
+        model sizes (32K--1.8M parameters).
+  \item A $15\times$ reduction in parameters (from $d=256$ to $d=32$)
+        preserves the full stability margin.
+  \item This suggests that JointOptimizer can be deployed on
+        resource-constrained edge devices without performance loss.
+\end{itemize}
+
+
+% ============================================================
+\section*{Summary of Changes from SmartGridComm 2026 Submission}
+% ============================================================
+
+\begin{enumerate}
+  \item \textbf{5 IEEE cases} (14, 30, 39, 57, 118) instead of 3.
+  \item \textbf{K-scaling fix}: $K_{\mathrm{init}} =
+        \mathit{safety\_factor} \cdot |\lambda_{\min}| / n_{\mathrm{gen}}$
+        instead of fixed $K=0.1$.
+  \item \textbf{Theorem~2 renamed} to Observation~1 (information separation).
+  \item \textbf{GPU training} (CUDA) instead of Apple M1 CPU.
+  \item \textbf{New experiments} (Tables III, IV, VII, VIII, IX, X):
+        stress test, transfer learning, N-1 contingency, delay
+        distribution robustness, convergence analysis, model compression.
+  \item \textbf{Additional baselines}: B8 (HeteroGNN) and B9 (DeepOPF)
+        in the inference table.
+  \item \textbf{Pad\'{e} analysis}: Pad\'{e}-approximant-based DDE
+        simulation used for large-scale Theorem~1 validation (see
+        companion figures, not tabulated).
+  \item \textbf{Statistical rigor}: 5-seed runs with mean $\pm$ std
+        reported in Tables I and II.
+\end{enumerate}
+
+\end{document}

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🚀 Created on 01/11/2025🚀
+🚀 Created on 01/11/2026🚀
 
 Author: Franck Aboya
-Email: mesabo18@gmail.com / messouaboya17@gmail.com
+Email: franckjunioraboya.messou@ieee.org
 Github: https://github.com/mesabo
 Univ: Hosei University, PhD
 Dept: Science and Engineering
@@ -47,7 +47,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.models import JointOptimizer
 from src.losses import JointLoss
 from src.data import create_dataloaders, DelayConfig
-from src.utils.statistical_tests import set_all_seeds, compute_statistics, restrict_gpus
+from src.utils.statistical_tests import (
+    set_all_seeds,
+    compute_statistics,
+    restrict_gpus,
+    pairwise_wilcoxon,
+)
 
 
 @dataclass
@@ -62,6 +67,24 @@ class AblationResult:
     training_time: float
     seed: int = 0
     case_id: int = 39
+
+
+def _ablation_reference(axis_name: str):
+    """Reference (full-model) value for each ablation axis.
+
+    The reference is the value that corresponds to the unablated proposed
+    configuration; the Wilcoxon test then asks whether the reference's
+    margin is statistically greater than each ablated alternative.
+    """
+    return {
+        'alpha': 1.0,
+        'physics_mask': True,
+        'causal_mask': True,
+        'cross_attention': True,
+        'contrastive_loss': True,
+        'gnn_layers': 3,
+        'gamma': 0.1,
+    }.get(axis_name)
 
 
 def train_ablation_config(
@@ -83,6 +106,10 @@ def train_ablation_config(
     loss_config = {'alpha': 1.0, 'contrastive_weight': 0.1}
     model_overrides = {}
 
+    # gamma_override carries the user's ablation value when the gamma axis is
+    # being swept; None falls back to the model default (adaptive_gamma=True).
+    gamma_override: Any = None
+
     if config_name == 'alpha':
         loss_config['alpha'] = config_value
     elif config_name == 'gnn_layers':
@@ -99,6 +126,11 @@ def train_ablation_config(
         model_overrides['use_cross_attention'] = config_value
     elif config_name == 'contrastive_loss':
         loss_config['contrastive_weight'] = 0.1 if config_value else 0.0
+    elif config_name == 'gamma':
+        # Major-revision ablation (APEN-D-26-05014, R3.1): sweep the physics-mask
+        # strength gamma instead of leaving it adaptive. Setting an explicit
+        # gamma value disables adaptive_gamma so the swept value is honored.
+        gamma_override = float(config_value)
 
     # Create data
     delay_config = DelayConfig(
@@ -126,7 +158,15 @@ def train_ablation_config(
     if impedance_matrix is not None:
         impedance_matrix = impedance_matrix.to(device)
 
-    # Create model with ablation overrides
+    # Create model with ablation overrides.
+    # When gamma is explicitly swept (revision ablation R3.1), pin it via
+    # physics_gamma and turn off adaptive scaling so the swept value applies.
+    if gamma_override is not None:
+        model_overrides.setdefault('physics_gamma', gamma_override)
+        model_overrides.setdefault('adaptive_gamma', False)
+    else:
+        model_overrides.setdefault('adaptive_gamma', True)
+
     model = JointOptimizer(
         n_generators=n_generators,
         energy_input_dim=5,
@@ -136,7 +176,6 @@ def train_ablation_config(
         num_heads=config['num_heads'],
         gnn_layers=config['gnn_layers'],
         k_init_scale=0.1,
-        adaptive_gamma=True,
         lambda_min_0=lambda_min_0_val,
         **model_overrides,
     ).to(device)
@@ -308,7 +347,12 @@ def plot_ablation_results(
         colors = plt.cm.tab10(np.linspace(0, 1, len(case_results)))
 
         for (case_id, agg_results), color in zip(sorted(case_results.items()), colors):
-            x_values = list(agg_results.keys())
+            # Skip meta-keys (e.g. "_wilcoxon_vs_reference") that are not real
+            # ablation values and don't carry a 'margin' substructure.
+            x_values = [v for v in agg_results.keys()
+                        if not (isinstance(v, str) and v.startswith('_'))
+                        and isinstance(agg_results[v], dict)
+                        and 'margin' in agg_results[v]]
             means = [agg_results[v]['margin']['mean'] for v in x_values]
             stds = [agg_results[v]['margin']['std'] for v in x_values]
 
@@ -345,17 +389,23 @@ def run_ablation_study(
     case_ids: List[int] = None,
     epochs: int = 100,
     num_scenarios: int = 500,
-    num_seeds: int = 3,
+    num_seeds: int = 20,
     seed_multiplier: int = 42,
     output_dir: str = 'results/ablation',
 ):
-    """Run systematic ablation study (V2: multi-case, multi-seed)."""
+    """Run systematic ablation study (V2 + APEN-D-26-05014 revision).
+
+    The major-revision response bumps the default seed count from 3 to 20 so
+    Wilcoxon-signed-rank tests with Holm-Sidak correction reach the
+    p < 0.01 regime (R1.9), and adds an explicit physics-mask-strength
+    (gamma) sweep (R3.1).
+    """
 
     if case_ids is None:
         case_ids = [39, 57]
 
     print("=" * 60)
-    print("SYSTEMATIC ABLATION STUDY (V2)")
+    print("SYSTEMATIC ABLATION STUDY (V2 + revision response)")
     print("=" * 60)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -370,7 +420,9 @@ def run_ablation_study(
         'gnn_layers': 3,
     }
 
-    # V2 ablation dimensions
+    # V2 + revision ablation dimensions. The 'gamma' axis is added in the
+    # major-revision response to APEN-D-26-05014 (R3.1) and sweeps the
+    # physics-mask strength across half a decade in either direction.
     ablations = {
         'alpha': [0.0, 0.1, 0.5, 1.0, 2.0],
         'physics_mask': [False, True],
@@ -378,6 +430,7 @@ def run_ablation_study(
         'cross_attention': [False, True],
         'contrastive_loss': [False, True],
         'gnn_layers': [1, 2, 3, 4],
+        'gamma': [0.01, 0.05, 0.1, 0.5, 1.0, 5.0],
     }
 
     # Results: ablation_name -> {case_id -> {value -> {margin: stats, ...}}}
@@ -425,6 +478,26 @@ def run_ablation_study(
                 m = case_agg[value]['margin']
                 print(f"Margin={m['mean']:.4f}±{m['std']:.4f}")
 
+            # Major-revision response (APEN-D-26-05014, R1.9): for each
+            # ablation axis, run paired Wilcoxon-signed-rank tests against
+            # the reference (full-model) value with Holm-Sidak correction
+            # across the values on that axis, so each ablated component
+            # reports a calibrated p-value rather than mean +/- std alone.
+            ref_value = _ablation_reference(ablation_name)
+            if ref_value is not None and ref_value in case_agg and len(values) > 1:
+                ref_margins = case_agg[ref_value]['margin']['values']
+                comparisons = {
+                    str(v): case_agg[v]['margin']['values']
+                    for v in values if v != ref_value and 'values' in case_agg[v]['margin']
+                }
+                if comparisons:
+                    case_agg['_wilcoxon_vs_reference'] = {
+                        'reference_value': ref_value,
+                        'tests': pairwise_wilcoxon(
+                            ref_margins, comparisons, alternative='greater'
+                        ),
+                    }
+
             all_results[ablation_name][case_id] = case_agg
 
     # Save results
@@ -450,8 +523,21 @@ def run_ablation_study(
     }
 
     json_path = f"{output_dir}/ablation_results_v2.json"
+
+    def _json_safe(o):
+        # numpy.bool_ -> bool, numpy.float32/int64 etc. -> Python scalar
+        if isinstance(o, np.bool_):
+            return bool(o)
+        if isinstance(o, (np.integer, np.floating)):
+            return o.item()
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        if hasattr(o, 'item'):
+            return o.item()
+        return str(o)
+
     with open(json_path, 'w') as f:
-        json.dump(results_dict, f, indent=2)
+        json.dump(results_dict, f, indent=2, default=_json_safe)
     print(f"\nResults saved to: {json_path}")
 
     # Generate plots

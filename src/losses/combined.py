@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🚀 Created on 01/26/2025🚀
+🚀 Created on 01/26/2026🚀
 
 Author: Franck Aboya
-Email: mesabo18@gmail.com / messouaboya17@gmail.com
+Email: franckjunioraboya.messou@ieee.org
 Github: https://github.com/mesabo
 Univ: Hosei University, PhD
 Dept: Science and Engineering
@@ -33,7 +33,7 @@ from typing import Dict, Optional, Tuple
 
 from .energy_loss import EnergyLoss
 from .communication_loss import CommunicationLoss
-from .coupling_loss import CouplingLoss
+from .coupling_loss import CouplingLoss, BidirectionalCouplingLoss
 from .contrastive import PhysicsAwareContrastiveLoss
 
 
@@ -67,6 +67,14 @@ class JointLoss(nn.Module):
         # Communication parameters
         tau_budget: float = 100.0,
         tau_max: float = 500.0,
+        # R1.8: bidirectional coupling residual
+        use_bidirectional_coupling: bool = False,
+        bidirectional_weight: float = 0.1,
+        bidirectional_lambda_ridge: float = 1e-2,
+        bidirectional_ema_decay: float = 0.99,
+        # Lever 2: optional L1 K regularization (drives K toward smaller values
+        # and lifts tau_crit; only enabled for the Lever3 variants).
+        lambda_l1_K: float = 0.0,
     ):
         """
         Args:
@@ -118,6 +126,20 @@ class JointLoss(nn.Module):
             temperature=temperature,
         )
 
+        # R1.8: bidirectional residual coupling. Off by default for backward
+        # compatibility; when enabled, training scripts must pass K, tau_max
+        # (seconds), and an empirical rho_emp tensor per minibatch.
+        self.use_bidirectional_coupling = bool(use_bidirectional_coupling)
+        self.bidirectional_weight = float(bidirectional_weight)
+        self.lambda_l1_K = float(lambda_l1_K)
+        if self.use_bidirectional_coupling:
+            self.bidirectional_coupling = BidirectionalCouplingLoss(
+                lambda_ridge=bidirectional_lambda_ridge,
+                ema_decay=bidirectional_ema_decay,
+            )
+        else:
+            self.bidirectional_coupling = None
+
     def forward(
         self,
         # Model outputs
@@ -140,6 +162,11 @@ class JointLoss(nn.Module):
         impedance_matrix: Optional[torch.Tensor] = None,
         # Control flag for baseline comparison
         use_coupling_loss: bool = True,
+        # R1.8: bidirectional residual inputs (only used when
+        # use_bidirectional_coupling=True at construction time)
+        K: Optional[torch.Tensor] = None,
+        tau_max_seconds: Optional[torch.Tensor] = None,
+        rho_emp: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """
         Compute total joint loss.
@@ -197,6 +224,37 @@ class JointLoss(nn.Module):
             )
             total_loss = total_loss + self.coupling_weight * L_coupling
             components.update(coupling_components)
+
+        # Lever 2: optional L1 penalty on K so gradient descent drives K_i
+        # toward smaller values, which lifts tau_crit per Theorem 1.
+        if self.lambda_l1_K > 0.0 and K is not None:
+            L_K_l1 = K.abs().mean()
+            total_loss = total_loss + self.lambda_l1_K * L_K_l1
+            components['L_K_l1'] = float(L_K_l1.detach().item())
+
+        # R1.8: bidirectional residual coupling. Pulls K toward both the
+        # analytical Pade margin (rho_th) and the closed-form ridge estimate
+        # K_data fit from the empirical (tau, rho_emp) batch. Only active when
+        # the loss was constructed with use_bidirectional_coupling=True and
+        # all inputs are supplied.
+        if (
+            self.bidirectional_coupling is not None
+            and K is not None
+            and tau is not None
+            and tau_max_seconds is not None
+            and rho_emp is not None
+            and lambda_min_0 is not None
+        ):
+            L_bi, bi_components = self.bidirectional_coupling(
+                K=K,
+                tau=tau,
+                tau_max=tau_max_seconds,
+                rho_emp=rho_emp,
+                lambda_min_0=lambda_min_0,
+            )
+            total_loss = total_loss + self.bidirectional_weight * L_bi
+            components.update(bi_components)
+            components['L_bidirectional'] = float(L_bi.detach().item())
 
         # Contrastive alignment loss (only if embeddings available)
         if self.contrastive_weight > 0 and h_E is not None and h_I is not None:

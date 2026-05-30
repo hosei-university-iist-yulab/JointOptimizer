@@ -1,0 +1,372 @@
+% ============================================================
+% KEY EQUATIONS FOR IEEE TRANS. SMART GRID (Journal Extension)
+% Energy-Information Co-Optimization via Learnable Coupling
+% ============================================================
+% VERIFIED AGAINST SOURCE CODE: src/models/*.py
+% Updated: 2026-02 — Journal version with auto-scaled K, 5 IEEE cases
+
+% ============================================================
+% SECTION: THEORETICAL FOUNDATION
+% ============================================================
+
+% ------------------------------------------------------------
+% THEOREM 1: Delay-Stability Coupling Bound
+% ------------------------------------------------------------
+% WHAT: The central theoretical contribution establishing a formal
+%       relationship between communication delay and power system stability.
+% WHY:  Enables prediction of stability degradation from network latency,
+%       allowing proactive grid management without trial-and-error.
+% WHERE: Applied in the loss function to enforce stability constraints
+%        during training (src/models/joint_optimizer.py:287-290).
+
+\begin{equation}
+\label{eq:stability_margin}
+\rho(\tau) = |\lambda_{\min}(0)| - \sum_{i=1}^{n_g} K_i \cdot \frac{\tau_i}{\tau_{\max}}
+\end{equation}
+
+\noindent where:
+\begin{itemize}
+    \item $\rho(\tau)$: Stability margin as a function of delay (positive $\Rightarrow$ stable)
+    \item $\lambda_{\min}(0)$: Minimum eigenvalue of the system Jacobian at zero delay
+    \item $K_i$: Learnable coupling constant for generator $i$ (sensitivity to delay)
+    \item $\tau_i$: Communication delay for generator $i$ (milliseconds)
+    \item $\tau_{\max}$: Maximum tolerable delay (typically 500ms for grid control)
+    \item $n_g$: Number of generators in the power system
+\end{itemize}
+
+\textbf{Physical interpretation:} The stability margin decreases linearly with normalized delay. When $\rho(\tau) > 0$, the closed-loop system remains stable; instability occurs when $\rho(\tau) \leq 0$.
+
+
+% ============================================================
+% SECTION: DUAL-DOMAIN GNN ENCODERS
+% ============================================================
+
+% ------------------------------------------------------------
+% ENERGY DOMAIN GNN
+% ------------------------------------------------------------
+% WHAT: Graph neural network encoding power system bus features.
+% WHY:  Captures electrical topology and power flow patterns that
+%       determine stability characteristics.
+% WHERE: First stage of JointOptimizer (src/models/gnn.py:156-254).
+% HOW:  Multi-layer GAT with residual connections and layer normalization.
+
+\begin{equation}
+\label{eq:energy_gnn}
+h_E^{(\ell)} = \text{LayerNorm}\left( h_E^{(\ell-1)} + \text{GAT}^{(\ell)}\left(h_E^{(\ell-1)}, \mathcal{E}_E\right) \right)
+\end{equation}
+
+\noindent where:
+\begin{itemize}
+    \item $h_E^{(\ell)} \in \mathbb{R}^{N \times d}$: Energy node embeddings at layer $\ell$
+    \item $h_E^{(0)} = W_{\text{proj}} x_E$: Initial projection from input features $x_E \in \mathbb{R}^{N \times 5}$
+    \item $x_E = [P, Q, V, \theta, \omega]$: Per-bus features (active/reactive power, voltage magnitude/angle, frequency)
+    \item $\mathcal{E}_E$: Edge set of power grid topology (transmission lines)
+    \item $\text{GAT}$: Graph Attention Network with multi-head attention
+    \item $N$: Number of buses; $d$: Embedding dimension (default 128)
+\end{itemize}
+
+% ------------------------------------------------------------
+% COMMUNICATION DOMAIN GNN
+% ------------------------------------------------------------
+% WHAT: Graph neural network encoding communication network features.
+% WHY:  Models latency, bandwidth, and routing that affect control signal delivery.
+% WHERE: Parallel to EnergyGNN (src/models/gnn.py:257-365).
+
+\begin{equation}
+\label{eq:comm_gnn}
+h_I^{(\ell)} = \text{LayerNorm}\left( h_I^{(\ell-1)} + \text{GAT}^{(\ell)}\left(h_I^{(\ell-1)}, \mathcal{E}_I\right) \right)
+\end{equation}
+
+\noindent where:
+\begin{itemize}
+    \item $h_I^{(\ell)} \in \mathbb{R}^{N \times d}$: Communication node embeddings at layer $\ell$
+    \item $h_I^{(0)} = W_{\text{proj}} x_I$: Initial projection from input features $x_I \in \mathbb{R}^{N \times 3}$
+    \item $x_I = [\tau, R, B]$: Per-node features (delay, data rate, bandwidth)
+    \item $\mathcal{E}_I$: Edge set of communication network topology
+\end{itemize}
+
+\textbf{Architectural note:} Both GNNs use identical architecture (3 layers, 4 attention heads) but operate on different graph topologies, enabling domain-specific feature extraction.
+
+
+% ============================================================
+% SECTION: PHYSICS-CONSTRAINED ATTENTION
+% ============================================================
+
+% ------------------------------------------------------------
+% PHYSICS MASK (Impedance-Weighted)
+% ------------------------------------------------------------
+% WHAT: Attention bias based on electrical distance between buses.
+% WHY:  Electrically close buses have stronger interactions; attention
+%       should reflect physical coupling strength.
+% WHERE: Applied to cross-domain attention (src/models/attention.py:40-60).
+% HOW:  Negative impedance ratio creates soft bias (not hard mask).
+
+\begin{equation}
+\label{eq:physics_mask}
+M_{\text{phys}}[i,j] = -\gamma \cdot \frac{Z_{ij}}{Z_{\max}}
+\end{equation}
+
+\noindent where:
+\begin{itemize}
+    \item $M_{\text{phys}} \in \mathbb{R}^{N \times N}$: Physics-informed attention mask
+    \item $Z_{ij}$: Electrical impedance between bus $i$ and bus $j$ (ohms)
+    \item $Z_{\max} = \max_{i,j} Z_{ij}$: Maximum impedance for normalization
+    \item $\gamma$: Mask strength hyperparameter (default 1.0)
+\end{itemize}
+
+\textbf{Effect:} Low impedance (close buses) $\Rightarrow$ $M_{\text{phys}} \approx 0$ (attend strongly). High impedance (distant buses) $\Rightarrow$ $M_{\text{phys}} < 0$ (attend weakly after softmax).
+
+% ------------------------------------------------------------
+% CAUSAL MASK (DAG-Based)
+% ------------------------------------------------------------
+% WHAT: Attention mask enforcing causal ordering in control DAG.
+% WHY:  Information should flow from causes to effects, not vice versa.
+%       Prevents spurious correlations from reverse causation.
+% WHERE: Applied to self-attention on energy domain (src/models/attention.py:106-126).
+% HOW:  Uses transitive closure of DAG to compute ancestor relationships.
+
+\begin{equation}
+\label{eq:causal_mask}
+M_{\text{causal}}[i,j] = \begin{cases}
+    0 & \text{if } j \in \text{Ancestors}(i) \text{ or } j = i \\
+    -\infty & \text{otherwise}
+\end{cases}
+\end{equation}
+
+\noindent where:
+\begin{itemize}
+    \item $M_{\text{causal}} \in \mathbb{R}^{N \times N}$: Causal attention mask
+    \item $\text{Ancestors}(i)$: Set of all nodes that causally precede node $i$ in the control DAG
+    \item The $-\infty$ values become 0 after softmax, blocking non-causal attention
+\end{itemize}
+
+\textbf{Construction:} Computed via transitive closure of the DAG adjacency matrix in $O(N^3)$ time, cached for efficiency.
+
+
+% ============================================================
+% SECTION: CROSS-DOMAIN ATTENTION MECHANISM
+% ============================================================
+
+% ------------------------------------------------------------
+% SCALED DOT-PRODUCT ATTENTION WITH MASK
+% ------------------------------------------------------------
+% WHAT: Standard transformer attention augmented with domain-specific masks.
+% WHY:  Enables selective information fusion respecting physical constraints.
+% WHERE: Core attention computation (src/models/attention.py:230-259).
+
+\begin{equation}
+\label{eq:attention}
+\text{Attn}(Q, K, V; M) = \text{softmax}\left( \frac{QK^\top}{\sqrt{d_k}} + M \right) V
+\end{equation}
+
+\noindent where:
+\begin{itemize}
+    \item $Q \in \mathbb{R}^{B \times H \times N \times d_k}$: Query tensor (from energy domain)
+    \item $K, V \in \mathbb{R}^{B \times H \times N \times d_k}$: Key and Value tensors (from communication domain)
+    \item $M \in \mathbb{R}^{N \times N}$: Attention mask ($M_{\text{phys}}$ or $M_{\text{causal}}$)
+    \item $d_k = d / H$: Per-head dimension
+    \item $B$: Batch size; $H$: Number of attention heads (default 8)
+\end{itemize}
+
+% ------------------------------------------------------------
+% CROSS-DOMAIN ATTENTION (Energy → Communication)
+% ------------------------------------------------------------
+% WHAT: Energy queries attending to communication keys/values.
+% WHY:  Allows energy domain to selectively gather relevant communication
+%       information while respecting electrical proximity.
+% WHERE: CrossDomainAttention module (src/models/attention.py:311-366).
+
+\begin{equation}
+\label{eq:cross_attention}
+h_{\text{cross}} = \text{Attn}(W_Q h_E, W_K h_I, W_V h_I; M_{\text{phys}})
+\end{equation}
+
+\noindent where:
+\begin{itemize}
+    \item $h_{\text{cross}} \in \mathbb{R}^{B \times N \times d}$: Cross-attended embeddings
+    \item $W_Q, W_K, W_V \in \mathbb{R}^{d \times d}$: Learnable projection matrices
+    \item $h_E$: Energy embeddings (queries)
+    \item $h_I$: Communication embeddings (keys and values)
+\end{itemize}
+
+
+% ============================================================
+% SECTION: HIERARCHICAL ATTENTION FUSION
+% ============================================================
+
+% ------------------------------------------------------------
+% TWO-STAGE ATTENTION WITH FUSION
+% ------------------------------------------------------------
+% WHAT: Complete attention module combining self-attention and cross-attention.
+% WHY:  Self-attention captures intra-domain patterns; cross-attention
+%       captures inter-domain dependencies; fusion combines both.
+% WHERE: HierarchicalAttention module (src/models/attention.py:368-448).
+% HOW:  Sequential application of causal self-attention, then cross-attention,
+%       then concatenation and feed-forward fusion.
+
+\begin{equation}
+\label{eq:causal_self_attn}
+h_E' = \text{LayerNorm}\left( h_E + \text{Attn}(h_E, h_E, h_E; M_{\text{causal}}) \right)
+\end{equation}
+
+\begin{equation}
+\label{eq:hierarchical_fusion}
+h_{\text{fused}} = \text{LayerNorm}\left( h_{\text{concat}} + \text{FFN}(h_{\text{concat}}) \right)
+\end{equation}
+
+\noindent where $h_{\text{concat}} = [h_E' \| h_{\text{cross}}]$ (concatenation along feature dimension), and:
+\begin{itemize}
+    \item $h_E' \in \mathbb{R}^{B \times N \times d}$: Causally-refined energy embeddings
+    \item $h_{\text{fused}} \in \mathbb{R}^{B \times N \times d}$: Final fused representation
+    \item $\text{FFN}$: Two-layer feed-forward network with GELU activation
+\end{itemize}
+
+\textbf{Key insight:} Masks are applied \textit{separately} (causal to self-attention, physics to cross-attention), not as element-wise product.
+
+
+% ============================================================
+% SECTION: LEARNABLE COUPLING CONSTANTS
+% ============================================================
+
+% ------------------------------------------------------------
+% LOG-PARAMETERIZED COUPLING
+% ------------------------------------------------------------
+% WHAT: Per-generator coupling constants learned from data.
+% WHY:  Traditional fixed K is overly conservative; learning K from data
+%       tightens stability bounds by ~18%.
+% WHERE: LearnableCouplingConstants module (src/models/coupling.py:12-56).
+% HOW:  Exponential parameterization guarantees positivity: K = exp(κ).
+
+\begin{equation}
+\label{eq:coupling_param}
+K_i = \exp(\kappa_i), \quad \kappa_i \in \mathbb{R}
+\end{equation}
+
+\noindent where:
+\begin{itemize}
+    \item $K_i > 0$: Coupling constant for generator $i$ (guaranteed positive)
+    \item $\kappa_i$: Learnable parameter (unconstrained real number)
+    \item Initialization: $\kappa_i = \log(K_{\text{init}})$, where $K_{\text{init}}$ is auto-scaled per grid (see below)
+\end{itemize}
+
+\textbf{Auto-scaled initialization:} $K_{\text{init}}$ is computed per grid to ensure a positive stability margin at the maximum delay:
+\begin{equation}
+\label{eq:k_init_auto}
+K_{\text{init}} = \frac{s \cdot |\lambda_{\min}(0)|}{n_g}, \quad s = 0.5 \text{ (safety factor)}
+\end{equation}
+This replaces the fixed $K=0.1$ used in the conference version, ensuring well-scaled initialization for grids of any size.
+
+\textbf{Training dynamics:} $K$ is further refined during training via gradient descent, typically decreasing from the initial value as the model learns to tighten stability bounds.
+
+
+% ============================================================
+% SECTION: LOSS FUNCTIONS
+% ============================================================
+
+% ------------------------------------------------------------
+% STABILITY LOSS (Hinge)
+% ------------------------------------------------------------
+% WHAT: Penalizes negative stability margins.
+% WHY:  Ensures model outputs maintain system stability (ρ > 0).
+% WHEN: Applied during training to enforce stability constraint.
+
+\begin{equation}
+\label{eq:stability_loss}
+\mathcal{L}_{\text{stab}} = \mathbb{E}\left[ \max(0, -\rho(\tau)) \right]
+\end{equation}
+
+\noindent This hinge loss is zero when stable ($\rho > 0$) and increases linearly with instability margin.
+
+% ------------------------------------------------------------
+% COUPLING LOSS (MSE)
+% ------------------------------------------------------------
+% WHAT: Aligns empirical and theoretical stability margins.
+% WHY:  Trains the model to produce margins consistent with Theorem 1.
+% WHEN: Applied with weight α to balance against other objectives.
+
+\begin{equation}
+\label{eq:coupling_loss}
+\mathcal{L}_{\text{couple}} = \left\| \rho_{\text{emp}} - \rho_{\text{theo}} \right\|_2^2
+\end{equation}
+
+\noindent where $\rho_{\text{emp}}$ is computed from model predictions and $\rho_{\text{theo}}$ from \eqref{eq:stability_margin}.
+
+% ------------------------------------------------------------
+% TOTAL LOSS
+% ------------------------------------------------------------
+% WHAT: Combined multi-objective loss function.
+% WHY:  Balances optimal power flow, communication QoS, stability, and coupling.
+
+\begin{equation}
+\label{eq:total_loss}
+\mathcal{L} = \mathcal{L}_{\text{OPF}} + \mathcal{L}_{\text{QoS}} + \mathcal{L}_{\text{stab}} + \alpha \mathcal{L}_{\text{couple}}
+\end{equation}
+
+\noindent where:
+\begin{itemize}
+    \item $\mathcal{L}_{\text{OPF}}$: Optimal power flow loss (generation cost minimization)
+    \item $\mathcal{L}_{\text{QoS}}$: Quality of service loss (communication latency/throughput)
+    \item $\mathcal{L}_{\text{stab}}$: Stability loss from \eqref{eq:stability_loss}
+    \item $\mathcal{L}_{\text{couple}}$: Coupling loss from \eqref{eq:coupling_loss}
+    \item $\alpha = 1.0$: Coupling loss weight (optimal from ablation study)
+\end{itemize}
+
+
+% ============================================================
+% SECTION: INFORMATION-THEORETIC SEPARATION (OBSERVATION 1)
+% ============================================================
+
+% ------------------------------------------------------------
+% MUTUAL INFORMATION BOUND
+% ------------------------------------------------------------
+% WHAT: Empirical observation on information separation between domains.
+% WHY:  Ensures domain-specific embeddings remain separable while
+%       coupling through learned K, not through spurious correlations.
+% WHERE: Validated empirically (I ≈ 10⁻⁴ nats in experiments).
+% NOTE: Renamed from "Theorem 2" (conference) to "Observation 1" (journal).
+
+\begin{equation}
+\label{eq:mutual_info}
+I(h_E; h_I) \leq \epsilon, \quad \epsilon \ll 1
+\end{equation}
+
+\noindent where:
+\begin{itemize}
+    \item $I(h_E; h_I)$: Mutual information between energy and communication embeddings
+    \item $\epsilon \approx 10^{-4}$ nats: Empirically observed upper bound
+\end{itemize}
+
+\textbf{Interpretation:} Low MI indicates the two domains encode complementary (not redundant) information, validating the dual-encoder architecture.
+
+
+% ============================================================
+% ALGORITHM 1: JointOptimizer Training
+% ============================================================
+% Lines: 16 (within 22-line limit)
+% Source: run_baseline_comparison.py, src/models/joint_optimizer.py
+
+\begin{algorithm}[t]
+\caption{JointOptimizer: Energy-Information Co-Optimization}
+\label{alg:joint_optimizer}
+\begin{algorithmic}[1]
+\REQUIRE Power grid graph $\mathcal{G}_E = (V, \mathcal{E}_E)$, Communication graph $\mathcal{G}_I = (V, \mathcal{E}_I)$, delays $\tau$, epochs $T$
+\ENSURE Trained parameters $\theta$, learned coupling constants $K$
+\STATE Initialize $\theta$ randomly; $K_{\text{init}} \leftarrow s \cdot |\lambda_{\min}|/n_g$; $\kappa \leftarrow \log(K_{\text{init}}) \cdot \mathbf{1}_{n_g}$ \COMMENT{Auto-scaled}
+\FOR{epoch $= 1$ to $T$}
+    \FOR{each batch $(x_E, x_I, \tau, \lambda_{\min})$}
+        \STATE $h_E \leftarrow \text{EnergyGNN}(x_E, \mathcal{G}_E)$ \COMMENT{Encode power system state}
+        \STATE $h_I \leftarrow \text{CommGNN}(x_I, \mathcal{G}_I)$ \COMMENT{Encode communication state}
+        \STATE $h_E' \leftarrow h_E + \text{CausalAttn}(h_E; M_{\text{causal}})$ \COMMENT{Causal self-attention}
+        \STATE $h_{\text{cross}} \leftarrow \text{CrossAttn}(h_E', h_I; M_{\text{phys}})$ \COMMENT{Physics-masked cross-attention}
+        \STATE $h_{\text{fused}} \leftarrow \text{FFN}([h_E' \| h_{\text{cross}}])$ \COMMENT{Fusion}
+        \STATE $(P^*, Q^*) \leftarrow \text{Decoder}(h_{\text{fused}})$ \COMMENT{Predict optimal dispatch}
+        \STATE $K \leftarrow \exp(\kappa)$; \quad $\rho \leftarrow |\lambda_{\min}| - \sum_i K_i \tau_i / \tau_{\max}$ \COMMENT{Theorem 1}
+        \STATE $\mathcal{L} \leftarrow \mathcal{L}_{\text{OPF}} + \mathcal{L}_{\text{QoS}} + \mathcal{L}_{\text{stab}} + \alpha \|\rho_{\text{emp}} - \rho\|^2$
+        \STATE $\theta, \kappa \leftarrow \text{Adam}(\nabla_{\theta,\kappa} \mathcal{L})$ \COMMENT{Update all parameters}
+    \ENDFOR
+\ENDFOR
+\RETURN $\theta$, $K = \exp(\kappa)$
+\end{algorithmic}
+\end{algorithm}
+
+\textbf{Complexity:} $O(N^2 \cdot d)$ per batch due to attention; $O(|\mathcal{E}| \cdot d)$ for GNN message passing. Validated on IEEE 14, 30, 39, 57, and 118-bus systems (GPU training).

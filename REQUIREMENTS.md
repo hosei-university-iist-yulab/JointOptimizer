@@ -1,9 +1,9 @@
 # Implementation Requirements Checklist
 
 ## Status Legend
--✔ Ready
+- ✔Ready
 - ⚠️ Needs clarification
--╳ Missing / Blocked
+- ╳ Missing / Blocked
 
 ---
 
@@ -13,9 +13,9 @@
 
 | Dataset | Status | Source | Action Needed |
 |---------|--------|--------|---------------|
-| IEEE 14-bus |✔ Ready | MATPOWER / PyPSA | Built into libraries |
-| IEEE 39-bus |✔ Ready | MATPOWER / PyPSA | Built into libraries |
-| IEEE 118-bus |✔ Ready | MATPOWER / PyPSA | Built into libraries |
+| IEEE 14-bus | ✔Ready | MATPOWER / PyPSA | Built into libraries |
+| IEEE 39-bus | ✔Ready | MATPOWER / PyPSA | Built into libraries |
+| IEEE 118-bus | ✔Ready | MATPOWER / PyPSA | Built into libraries |
 | IEEE 2000-bus | ⚠️ Check | Synthetic / TAMU | Verify availability |
 
 ### 1.2 Communication Datasets
@@ -23,7 +23,7 @@
 | Dataset | Status | Action Needed |
 |---------|--------|---------------|
 | GridLAB-D co-simulation | ⚠️ Setup required | Install GridLAB-D, create co-sim scenarios |
-| Synthetic delays |✔ Ready | Generate from distributions |
+| Synthetic delays | ✔Ready | Generate from distributions |
 | CAIDA traces | ⚠️ Optional | Apply for academic license |
 | Mininet-WiFi | ⚠️ Optional | Install if needed for ablation |
 
@@ -43,17 +43,17 @@
 
 | Package | Version | Status | Purpose |
 |---------|---------|--------|---------|
-| Python | ≥3.9 |✔ | Runtime |
-| PyTorch | ≥2.0 |✔ | Deep learning |
-| PyTorch Geometric | ≥2.3 |✔ | GNN layers |
-| NumPy | ≥1.24 |✔ | Numerical |
-| SciPy | ≥1.10 |✔ | Eigenvalue computation |
+| Python | ≥3.9 | ✔| Runtime |
+| PyTorch | ≥2.0 | ✔| Deep learning |
+| PyTorch Geometric | ≥2.3 | ✔| GNN layers |
+| NumPy | ≥1.24 | ✔| Numerical |
+| SciPy | ≥1.10 | ✔| Eigenvalue computation |
 
 ### 2.2 Power System Libraries
 
 | Package | Version | Status | Purpose |
 |---------|---------|--------|---------|
-| pandapower | ≥2.13 |✔ | Power flow, IEEE cases |
+| pandapower | ≥2.13 | ✔| Power flow, IEEE cases |
 | PyPSA | ≥0.25 | ⚠️ Alternative | Power system analysis |
 | MATPOWER (via Oct2Py) | optional | ⚠️ | MATLAB interface |
 
@@ -63,17 +63,17 @@
 |---------|---------|--------|---------|
 | cvxpy | ≥1.4 | ⚠️ Check | Convex optimization |
 | Gurobi | optional | ⚠️ License | OPF solver (academic free) |
-| OSQP | ≥0.6 |✔ | QP solver (open source) |
+| OSQP | ≥0.6 | ✔| QP solver (open source) |
 
 ### 2.4 Utilities
 
 | Package | Version | Status | Purpose |
 |---------|---------|--------|---------|
-| wandb | ≥0.15 |✔ | Experiment tracking |
-| matplotlib | ≥3.7 |✔ | Visualization |
-| networkx | ≥3.1 |✔ | Graph utilities |
-| pyyaml | ≥6.0 |✔ | Config files |
-| tqdm | ≥4.65 |✔ | Progress bars |
+| wandb | ≥0.15 | ✔| Experiment tracking |
+| matplotlib | ≥3.7 | ✔| Visualization |
+| networkx | ≥3.1 | ✔| Graph utilities |
+| pyyaml | ≥6.0 | ✔| Config files |
+| tqdm | ≥4.65 | ✔| Progress bars |
 
 ### 2.5 requirements.txt (Draft)
 
@@ -99,9 +99,9 @@ osqp>=0.6.0
 | Component | Minimum | Recommended | Status |
 |-----------|---------|-------------|--------|
 | GPU | RTX 3060 (12GB) | RTX 3090 (24GB) | ⚠️ Verify available |
-| CPU | 8 cores | 16+ cores |✔ |
+| CPU | 8 cores | 16+ cores | ✔|
 | RAM | 32 GB | 64 GB | ⚠️ Verify |
-| Storage | 50 GB | 100 GB SSD |✔ |
+| Storage | 50 GB | 100 GB SSD | ✔|
 
 ---
 
@@ -126,10 +126,10 @@ osqp>=0.6.0
 
 | Item | Status | Action |
 |------|--------|--------|
-| K_i computation from system matrices |╳ Missing | Derive K_i = ||B_i · K_controller|| |
-| τ_max computation per generator |╳ Missing | Implement from transfer function |
+| K_i computation from system matrices | ╳ Missing | Derive K_i = ||B_i · K_controller|| |
+| τ_max computation per generator | ╳ Missing | Implement from transfer function |
 | λ_min(0) computation | ⚠️ Standard | Use scipy.linalg.eig on A matrix |
-| Entropy rate H(P_e) estimation |╳ Missing | Need estimation method |
+| Entropy rate H(P_e) estimation | ╳ Missing | Need estimation method |
 
 ### 4.3 Architecture Details ⚠️ NEED SPECIFICATION
 
@@ -290,7 +290,7 @@ Output: (u, τ_pred)
 
 ## 8. Pre-Implementation Checklist
 
-### Must Have✔
+### Must Have ✔
 
 - [ ] Python environment set up
 - [ ] PyTorch + PyG installed and tested

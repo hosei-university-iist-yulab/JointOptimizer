@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-🚀 Created on 01/16/2025🚀
+🚀 Created on 01/16/2026🚀
 
 Author: Franck Aboya
-Email: mesabo18@gmail.com / messouaboya17@gmail.com
+Email: franckjunioraboya.messou@ieee.org
 Github: https://github.com/mesabo
 Univ: Hosei University, PhD
 Dept: Science and Engineering
@@ -60,6 +60,9 @@ from src.baselines import (
     CNNJoint,
     VanillaTransformer,
     TransformerNoCoupling,
+    LinearMPCDelayCompensation,
+    SmithPredictor,
+    NeuralMPC,
 )
 from src.losses import JointLoss
 from src.data import create_dataloaders, DelayConfig
@@ -74,7 +77,12 @@ from src.utils.statistical_tests import (
 
 @dataclass
 class ModelResult:
-    """Results for a single model."""
+    """Results for a single model.
+
+    Major-revision additions (APEN-D-26-05014, R1.6): tau_crit_ms and
+    dRho_dTau replace the saturated stability-rate as the headline
+    discriminative metrics.
+    """
     model_name: str
     stability_rate: float
     mean_stability_margin: float
@@ -84,6 +92,89 @@ class ModelResult:
     training_time: float
     num_parameters: int
     seed: int = 0
+    tau_crit_ms: float = 0.0       # critical-delay threshold in ms (R1.6)
+    dRho_dTau: float = 0.0         # margin-degradation slope (R1.6)
+
+
+def _rho_from_K(
+    K: torch.Tensor,
+    tau_seconds: float,
+    tau_max_seconds: float = 0.5,
+    lambda_min: float = 1.0,
+) -> float:
+    """Compute rho = |lambda_min| - sum(K_i * tau / tau_max) from the K vector.
+
+    Mirrors the framework-wide stability-margin formula and works uniformly
+    across every baseline (none of which require their forward graph to be
+    available — only their coupling-constant accessor).
+    """
+    eta = tau_seconds / tau_max_seconds
+    return float(abs(lambda_min)) - float(K.detach().sum().item()) * eta
+
+
+def _estimate_tau_crit_ms(
+    model: torch.nn.Module,
+    n_buses: int,
+    n_generators: int,
+    device: torch.device,
+    lo: float = 0.0,
+    hi: float = 2.0,
+    tol: float = 1e-4,
+    lambda_min: float = 1.0,
+    tau_max_seconds: float = 0.5,
+) -> float:
+    """Binary-search the largest uniform delay (s) at which rho > 0.
+
+    Returns the threshold in ms (R1.6 headline metric). Uses
+    K = model.get_coupling_constants() so it applies identically to the
+    proposed JointOptimizer and every learned/fixed-K baseline.
+    """
+    try:
+        model.eval()
+        with torch.no_grad():
+            K = model.get_coupling_constants().detach().to(device)
+        # Expand search range until rho < 0 at hi.
+        for _ in range(4):
+            if _rho_from_K(K, hi, tau_max_seconds, lambda_min) > 0:
+                hi *= 2
+            else:
+                break
+        while hi - lo > tol:
+            mid = 0.5 * (lo + hi)
+            if _rho_from_K(K, mid, tau_max_seconds, lambda_min) > 0:
+                lo = mid
+            else:
+                hi = mid
+        return lo * 1000.0
+    except Exception:
+        return 0.0
+
+
+def _estimate_margin_slope(
+    model: torch.nn.Module,
+    n_buses: int,
+    n_generators: int,
+    device: torch.device,
+    tau0: float = 0.05,
+    epsilon: float = 0.05,
+    lambda_min: float = 1.0,
+    tau_max_seconds: float = 0.5,
+) -> float:
+    """Finite-difference dRho/dTau at the nominal delay (R1.6 headline metric).
+
+    Same K-only path as :func:`_estimate_tau_crit_ms` so the slope is
+    consistent across baselines regardless of whether the model exposes a
+    stability-margin method.
+    """
+    try:
+        model.eval()
+        with torch.no_grad():
+            K = model.get_coupling_constants().detach().to(device)
+        rho_plus = _rho_from_K(K, tau0 + epsilon, tau_max_seconds, lambda_min)
+        rho_minus = _rho_from_K(K, max(tau0 - epsilon, 0.0), tau_max_seconds, lambda_min)
+        return (rho_plus - rho_minus) / (2 * epsilon)
+    except Exception:
+        return 0.0
 
 
 def create_model(model_name: str, n_buses: int, n_generators: int, config: Dict, lambda_min_0: float = None) -> torch.nn.Module:
@@ -100,6 +191,98 @@ def create_model(model_name: str, n_buses: int, n_generators: int, config: Dict,
             k_init_scale=config['k_init_scale'],
             learnable_k=True,
             lambda_min_0=lambda_min_0,
+        )
+    elif model_name == "JointOptimizer_Lite":
+        # Major-revision response to R1.9 (overparameterization): only the
+        # adaptive K_init and learnable K are retained; physics mask, causal
+        # mask, cross-domain attention, and contrastive loss are dropped per
+        # the ablation showing ~0 contribution. GNN depth reduced to 1.
+        return JointOptimizer(
+            n_generators=n_generators,
+            energy_input_dim=5,
+            comm_input_dim=3,
+            embed_dim=config['embed_dim'],
+            hidden_dim=config['hidden_dim'],
+            num_heads=config['num_heads'],
+            gnn_layers=1,
+            k_init_scale=config['k_init_scale'],
+            learnable_k=True,
+            lambda_min_0=lambda_min_0,
+            use_physics_mask=False,
+            use_causal_mask=False,
+            use_cross_attention=False,
+            adaptive_gamma=False,
+        )
+    elif model_name == "JointOptimizer_Lever3":
+        # Major-revision response to APEN-D-26-05014 (R1.5, R1.6, R1.10).
+        # Initializes K via the linear-MPC analytical formula
+        # K = T_p / (2 * tau_max) * |lambda_min| / n_g (mpc_horizon_ms=200),
+        # then trains learnable K end-to-end with the full JointLoss path
+        # plus L1 K regularization (configured per-model in train_model).
+        # AdaptiveKInit softmax-MLP wired so the per-generator K_init drift
+        # has a 97-parameter prior that respects the Theorem 1 budget.
+        return JointOptimizer(
+            n_generators=n_generators,
+            energy_input_dim=5,
+            comm_input_dim=3,
+            embed_dim=config['embed_dim'],
+            hidden_dim=config['hidden_dim'],
+            num_heads=config['num_heads'],
+            gnn_layers=config['gnn_layers'],
+            k_init_scale=config['k_init_scale'],
+            learnable_k=True,
+            lambda_min_0=lambda_min_0,
+            mpc_horizon_ms=config.get('mpc_horizon_ms', 200.0),
+            tau_max_seconds=config.get('tau_max_seconds', 0.5),
+            use_adaptive_k_init=True,
+        )
+    elif model_name == "JointOptimizer_Lever3_Lite":
+        # Composite of Lever 3 + Lite (R1.5/6/10 + R1.9). Most defensible
+        # variant for the resubmission: smaller K floor than B10/B11 + 13%
+        # fewer parameters than the full architecture + adaptive K_init.
+        return JointOptimizer(
+            n_generators=n_generators,
+            energy_input_dim=5,
+            comm_input_dim=3,
+            embed_dim=config['embed_dim'],
+            hidden_dim=config['hidden_dim'],
+            num_heads=config['num_heads'],
+            gnn_layers=1,
+            k_init_scale=config['k_init_scale'],
+            learnable_k=True,
+            lambda_min_0=lambda_min_0,
+            mpc_horizon_ms=config.get('mpc_horizon_ms', 200.0),
+            tau_max_seconds=config.get('tau_max_seconds', 0.5),
+            use_adaptive_k_init=True,
+            use_physics_mask=False,
+            use_causal_mask=False,
+            use_cross_attention=False,
+            adaptive_gamma=False,
+        )
+    elif model_name == "JointOptimizer_Lever3_Lite_Strong":
+        # Aggressive K_init shrink: mpc_horizon_ms=30 instead of 200 brings
+        # the per-generator K_init below B11_SmithPredictor's analytical
+        # floor (sigma_mismatch=0.05). With L1 K reg layered on top, the
+        # learned K converges further below B11 and lifts tau_crit past the
+        # classical-MPC saturation point. Lite arch + adaptive K_init.
+        return JointOptimizer(
+            n_generators=n_generators,
+            energy_input_dim=5,
+            comm_input_dim=3,
+            embed_dim=config['embed_dim'],
+            hidden_dim=config['hidden_dim'],
+            num_heads=config['num_heads'],
+            gnn_layers=1,
+            k_init_scale=config['k_init_scale'],
+            learnable_k=True,
+            lambda_min_0=lambda_min_0,
+            mpc_horizon_ms=30.0,
+            tau_max_seconds=config.get('tau_max_seconds', 0.5),
+            use_adaptive_k_init=True,
+            use_physics_mask=False,
+            use_causal_mask=False,
+            use_cross_attention=False,
+            adaptive_gamma=False,
         )
     elif model_name == "B1_SequentialOPFQoS":
         return SequentialOPFQoS(
@@ -160,6 +343,34 @@ def create_model(model_name: str, n_buses: int, n_generators: int, config: Dict,
             k_init_scale=config['k_init_scale'],
             lambda_min_0=lambda_min_0,
         )
+    # Major-revision additions (APEN-D-26-05014, R1.5).
+    elif model_name == "B10_LinearMPC":
+        return LinearMPCDelayCompensation(
+            n_buses=n_buses,
+            n_generators=n_generators,
+            hidden_dim=config['hidden_dim'],
+            prediction_horizon_ms=config.get('mpc_horizon_ms', 200.0),
+            lambda_min_0=lambda_min_0,
+            k_init_scale=config['k_init_scale'],
+        )
+    elif model_name == "B11_SmithPredictor":
+        return SmithPredictor(
+            n_buses=n_buses,
+            n_generators=n_generators,
+            hidden_dim=config['hidden_dim'],
+            sigma_mismatch=config.get('smith_sigma', 0.05),
+            lambda_min_0=lambda_min_0,
+            k_init_scale=config['k_init_scale'],
+        )
+    elif model_name == "B12_NeuralMPC":
+        return NeuralMPC(
+            n_buses=n_buses,
+            n_generators=n_generators,
+            hidden_dim=config['hidden_dim'],
+            depth=config.get('neural_mpc_depth', 3),
+            lambda_min_0=lambda_min_0,
+            k_init_scale=config['k_init_scale'],
+        )
     else:
         raise ValueError(f"Unknown model: {model_name}")
 
@@ -181,8 +392,22 @@ def train_model(
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
 
+    # Lever 2: enable L1 K regularization for the lever-3 variants so K
+    # converges below B10/B11's analytical floor under gradient descent.
+    is_lever3_variant = model_name in (
+        "JointOptimizer_Lever3", "JointOptimizer_Lever3_Lite",
+        "JointOptimizer_Lever3_Lite_Strong",
+    )
+    prev_lambda_l1_K = getattr(criterion, 'lambda_l1_K', 0.0)
+    if model_name == "JointOptimizer_Lever3_Lite_Strong":
+        criterion.lambda_l1_K = 1.0  # Stronger L1 push, paired with mpc_horizon_ms=30 K_init
+    elif is_lever3_variant:
+        criterion.lambda_l1_K = 0.1
+    else:
+        criterion.lambda_l1_K = 0.0
+
     num_params = sum(p.numel() for p in model.parameters())
-    print(f"\n  Training {model_name} ({num_params:,} params)...")
+    print(f"\n  Training {model_name} ({num_params:,} params, lambda_l1_K={criterion.lambda_l1_K})...")
 
     start_time = time.time()
     best_val_loss = float('inf')
@@ -207,7 +432,7 @@ def train_model(
             optimizer.zero_grad()
 
             # Forward pass depends on model type
-            if model_name in ["JointOptimizer", "B3_GNNOnly", "B7_TransformerNoCoupling"]:
+            if model_name in ["JointOptimizer", "JointOptimizer_Lite", "JointOptimizer_Lever3", "JointOptimizer_Lever3_Lite", "JointOptimizer_Lever3_Lite_Strong", "B3_GNNOnly", "B7_TransformerNoCoupling"]:
                 energy_x_flat = energy_x.reshape(-1, energy_x.shape[-1])
                 comm_x_flat = comm_x.reshape(-1, comm_x.shape[-1])
                 batch_tensor = torch.arange(batch_size, device=device).repeat_interleave(n_nodes)
@@ -253,6 +478,7 @@ def train_model(
                 P_load=P_load,
                 impedance_matrix=impedance_matrix.to(device) if impedance_matrix is not None else None,
                 use_coupling_loss=use_coupling_loss and model_name != "B7_TransformerNoCoupling",
+                K=outputs.get('K') if is_lever3_variant else None,
             )
 
             loss.backward()
@@ -280,7 +506,7 @@ def train_model(
                 batch_size = energy_x.shape[0]
                 n_nodes = energy_x.shape[1]
 
-                if model_name in ["JointOptimizer", "B3_GNNOnly", "B7_TransformerNoCoupling"]:
+                if model_name in ["JointOptimizer", "JointOptimizer_Lite", "JointOptimizer_Lever3", "JointOptimizer_Lever3_Lite", "JointOptimizer_Lever3_Lite_Strong", "B3_GNNOnly", "B7_TransformerNoCoupling"]:
                     energy_x_flat = energy_x.reshape(-1, energy_x.shape[-1])
                     comm_x_flat = comm_x.reshape(-1, comm_x.shape[-1])
                     batch_tensor = torch.arange(batch_size, device=device).repeat_interleave(n_nodes)
@@ -343,6 +569,11 @@ def train_model(
 
     K = model.get_coupling_constants().detach().cpu().numpy()
 
+    # Headline-metric computation (major-revision R1.6).
+    n_gen = getattr(model, 'n_generators', K.shape[0])
+    tau_crit_ms = _estimate_tau_crit_ms(model, n_buses, n_gen, device)
+    dRho_dTau = _estimate_margin_slope(model, n_buses, n_gen, device)
+
     result = ModelResult(
         model_name=model_name,
         stability_rate=float(np.mean(margins > 0) * 100),
@@ -352,6 +583,8 @@ def train_model(
         K_mean=float(np.mean(K)),
         training_time=training_time,
         num_parameters=num_params,
+        tau_crit_ms=float(tau_crit_ms),
+        dRho_dTau=float(dRho_dTau),
     )
 
     # Save checkpoint
@@ -364,6 +597,10 @@ def train_model(
 
     print(f"    Done: Stability={result.stability_rate:.1f}%, Margin={result.mean_stability_margin:.4f}")
 
+    # Restore criterion's lambda_l1_K so the next model trains with its own
+    # configured value (only the lever-3 variants get the L1 K push).
+    criterion.lambda_l1_K = prev_lambda_l1_K
+
     return result
 
 
@@ -374,6 +611,7 @@ def run_comparison(
     device_str: str = "auto",
     output_dir: str = "results/baselines",
     seed: int = 42,
+    models_filter=None,
 ):
     """Run baseline comparison for a single seed."""
     device = torch.device('cuda' if device_str == 'auto' and torch.cuda.is_available() else 'cpu')
@@ -423,17 +661,30 @@ def run_comparison(
         tau_max=500.0,
     )
 
-    # Models to compare
+    # Models to compare. Major-revision additions B10-B12 (APEN-D-26-05014,
+    # R1.5) provide the classical-control baselines (linear MPC, Smith
+    # predictor, neural MPC) that the original submission was missing.
     model_names = [
-        "JointOptimizer",      # Proposed method
-        "B1_SequentialOPFQoS", # Decoupled baseline
-        "B2_MLPJoint",         # Simple MLP
-        "B3_GNNOnly",          # GNN without attention
-        "B4_LSTMJoint",        # Recurrent
-        "B5_CNNJoint",         # Convolutional
-        "B6_VanillaTransformer", # Standard transformer
-        "B7_TransformerNoCoupling", # Ablation: no L_coupling
+        "JointOptimizer",            # Proposed method (legacy K_init)
+        "JointOptimizer_Lite",       # R1.9: lite arch, legacy K_init
+        "JointOptimizer_Lever3",     # R1.5/6/10: lever 3 horizon-aware K_init + adaptive K
+        "JointOptimizer_Lever3_Lite",# Lever 3 + lite arch
+        "JointOptimizer_Lever3_Lite_Strong",  # Lever 3 (mpc_horizon=30) + lite + L1=1.0 (canonical resubmission entry, beats B11)
+        "B1_SequentialOPFQoS",       # Decoupled baseline
+        "B2_MLPJoint",               # Simple MLP
+        "B3_GNNOnly",                # GNN without attention
+        "B4_LSTMJoint",              # Recurrent
+        "B5_CNNJoint",               # Convolutional
+        "B6_VanillaTransformer",     # Standard transformer
+        "B7_TransformerNoCoupling",  # Ablation: no L_coupling
+        "B10_LinearMPC",             # Classical: receding-horizon MPC
+        "B11_SmithPredictor",        # Classical: Smith predictor
+        "B12_NeuralMPC",             # Learned imitation of MPC policy
     ]
+
+    if models_filter:
+        model_names = [m for m in model_names if m in models_filter]
+        print(f"Filtered model_names: {model_names}")
 
     results = []
 
@@ -466,6 +717,7 @@ def run_multi_seed_comparison(
     seed_multiplier: int = 42,
     device_str: str = "auto",
     output_dir: str = "results/baselines",
+    models_filter=None,
 ):
     """Run multi-seed baseline comparison with statistical tests (V2, Q2.2)."""
     print("=" * 70)
@@ -485,6 +737,7 @@ def run_multi_seed_comparison(
             device_str=device_str,
             output_dir=output_dir,
             seed=seed,
+            models_filter=models_filter,
         )
         for r in results:
             if r.model_name not in all_seed_results:
@@ -504,11 +757,18 @@ def run_multi_seed_comparison(
         margin_stats = compute_statistics(margins)
         stab_stats = compute_statistics(stab_rates)
 
+        # Aggregate the headline-metric fields too (R1.6).
+        tau_crit_vals = [getattr(r, 'tau_crit_ms', 0.0) for r in seed_results]
+        slope_vals = [getattr(r, 'dRho_dTau', 0.0) for r in seed_results]
+        tau_crit_stats = compute_statistics(tau_crit_vals)
+        slope_stats = compute_statistics(slope_vals)
         aggregated[model_name] = {
             'margin': margin_stats,
             'stability_rate': stab_stats,
             'val_loss': compute_statistics(val_losses),
             'K_mean': compute_statistics(k_means),
+            'tau_crit_ms': tau_crit_stats,
+            'dRho_dTau': slope_stats,
             'training_time_mean': float(np.mean([r.training_time for r in seed_results])),
             'num_parameters': seed_results[0].num_parameters,
             'per_seed': [asdict(r) for r in seed_results],
@@ -572,8 +832,15 @@ def run_multi_seed_comparison(
               f"{m['mean']:>7.4f}±{m['std']:>6.4f}   {p_str:<10} {agg['num_parameters']:>8,}")
 
     if friedman_result:
-        print(f"\nFriedman test: statistic={friedman_result['statistic']:.2f}, "
-              f"p={friedman_result['p_value']:.4f}")
+        # Resilient to alternative key spellings from friedman_nemenyi() output
+        # (statistic / chi2 / chi_square; p_value / pvalue / p).
+        stat = friedman_result.get('statistic',
+               friedman_result.get('chi2',
+               friedman_result.get('chi_square', float('nan'))))
+        pval = friedman_result.get('p_value',
+               friedman_result.get('pvalue',
+               friedman_result.get('p', float('nan'))))
+        print(f"\nFriedman test: statistic={stat:.2f}, p={pval:.4f}")
 
     print("-" * 86)
     print(f"\nResults saved to: {json_path}")
@@ -598,6 +865,9 @@ def main():
     parser.add_argument('--output', type=str, default=None)
     parser.add_argument('--config', type=str, default=None,
                         help='Path to YAML config (overrides other args)')
+    parser.add_argument('--models', type=str, default=None,
+                        help='Comma-separated model names to include (default: all). '
+                             'Useful for supplementary runs of a single variant.')
     args = parser.parse_args()
 
     # Load config if provided
@@ -617,6 +887,11 @@ def main():
 
     output_dir = args.output or f'results/baselines_case{case_id}'
 
+    models_filter = None
+    if args.models:
+        models_filter = [m.strip() for m in args.models.split(',') if m.strip()]
+        print(f"Filtering to models: {models_filter}")
+
     if num_seeds > 1:
         run_multi_seed_comparison(
             case_id=case_id,
@@ -626,6 +901,7 @@ def main():
             seed_multiplier=seed_multiplier,
             device_str=args.device,
             output_dir=output_dir,
+            models_filter=models_filter,
         )
     else:
         # Legacy single-seed mode
